@@ -40,6 +40,18 @@ test("Roman numeral I after Section, Part, War, Type is one", async () => {
   assert.match((await say("Class C shares cost more."))[0], /^Class C shares/); // a grade, not 100
 });
 
+test("the pronoun I after section, article, chapter stays I; lowercase look-alikes stay words", async () => {
+  for (const s of ["In this section I argue that prices rise.", "In this article I show the result.",
+    "At that stage I left the firm.", "In this chapter I explain why.", "In this book I tell a story."]) {
+    assert.match((await say(s))[0], / I (argue|show|left|explain|tell)/, s);
+  }
+  assert.match((await say("We hold an asset class mix of bonds."))[0], /class mix of/);
+  assert.match((await say("Agents of type i choose first."))[0], /type i choose/);
+  assert.match((await say("By then the economy was at stage x of growth."))[0], /stage x of/);
+  assert.match((await say("See Chapter IV for details."))[0], /Chapter four for/);
+  assert.match((await say("The proof is in Section I. It is short."))[0], /Section one\. It/); // the full stop stays
+});
+
 test("a row of dashes is silent; a single dash is a pause", async () => {
   const [spoken] = await say("- - - - - - The story begins here.");
   assert.equal(spoken, "The story begins here.");
@@ -50,6 +62,12 @@ test("possessive of a name ending in s is said with -es; plural possessives are 
   assert.match((await say("We read Keynes’ essay."))[1], /nzᵻz ˈɛsA/);
   const [plural] = await say("The Vanderbilts’ fortune vanished.", ["Vanderbilt"]);
   assert.match(plural, /Vanderbilts' fortune/);
+  // plurals of ordinary words, even capitalised at the start of a sentence or in a heading
+  assert.match((await say("Workers’ wages rose."))[0], /^Workers' wages/);
+  assert.match((await say("On Consumers’ Surplus and prices."))[0], /Consumers' Surplus/);
+  // a closing single quote is not a possessive
+  assert.match((await say("He wrote ‘Hard Times’ in 1854."))[0], /Times' in/);
+  assert.match((await say("Smith wrote ‘The Wealth of Nations’ and more."))[0], /Nations' and/);
 });
 
 test("an italic title run into the sentence gets a short pause after it", async () => {

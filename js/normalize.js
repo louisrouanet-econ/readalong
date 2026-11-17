@@ -43,6 +43,7 @@ const ROMAN_CTX = new Set(["war", "chapter", "chap", "chap.", "ch.", "ch", "book
   "section", "sec.", "article", "art.", "act", "scene", "letter", "no.", "number", "appendix", "lecture", "essay", "canto",
   "psalm", "title", "amendment", "type", "class", "phase", "stage", "level", "tier", "exhibit", "table", "figure", "fig.",
   "series", ...REGNAL]);
+const ROMAN_CTX_UPPER = new Set(["type", "class", "phase", "stage", "level", "tier", "exhibit", "table", "figure", "fig", "series"]);
 // words after which a lone "I" is the numeral one ("Section I", "World War I", "Type I error"), not the pronoun
 const ROMAN_I_CTX = new Set(["chapter", "chap", "book", "part", "vol", "volume", "section", "sec", "appendix", "act",
   "article", "art", "war", "type", "class", "phase", "stage", "level", "tier", "exhibit", "table", "figure", "fig",
@@ -80,6 +81,16 @@ const TITLE_SMALL = new Set(["a", "an", "the", "of", "and", "or", "on", "in", "t
 const isUpper = (s) => s === s.toUpperCase() && s !== s.toLowerCase();
 const isLower = (s) => s === s.toLowerCase() && s !== s.toUpperCase();
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
+/** Is a ‘single quotation’ open before token i (so a closing ’ after it is a quote mark, not a possessive)? */
+function singleQuoteOpen(toks, i) {
+  for (let j = i; j >= Math.max(0, i - 25); j--) {
+    const t = toks[j].text;
+    if (j < i && /['’]["”)\]]*[.,;:!?]*$/.test(t) && !/s['’]$/.test(t.replace(/[.,;:!?"”)\]]+$/, ""))) return false;
+    if (/^["“(]*[‘']/.test(t)) return true;
+  }
+  return false;
+}
 
 export function splitPunct(t) {
   let i = 0, j = t.length;
@@ -192,7 +203,8 @@ export class Normalizer {
         say = core;
         // "Lewis’ book" is said "Lewis's"; plurals ("the Vanderbilts’ fortune") are left alone
         if (trail.startsWith("'") && !lead.includes("'") && /^\p{Lu}\p{Ll}+s$/u.test(core) && !core.endsWith("ss") &&
-            !this.opts.capWords.has(core.slice(0, -1))) { say = core + "'s"; trail = trail.slice(1); }
+            !this.opts.capWords.has(core.slice(0, -1)) && !this.lex.known(core.slice(0, -1).toLowerCase()) &&
+            !singleQuoteOpen(toks, i)) { say = core + "'s"; trail = trail.slice(1); }
       }
       if (Array.isArray(say)) { const [s, suf] = say; say = s; if (pendingSuffix) say += " " + pendingSuffix; pendingSuffix = suf; }
       else if (pendingSuffix) { say = say + " " + pendingSuffix; pendingSuffix = null; }
@@ -312,11 +324,17 @@ export class Normalizer {
     }
     const rv = romanValue(core);
     const bare = core.toUpperCase().replace(/\.$/, "");
+    // "Section I", "World War I": a lone I is one only after a capitalised word ("in this section I argue" is the pronoun)
+    const loneI = bare === "I" && ROMAN_I_CTX.has(prev.toLowerCase().replace(/\.$/, "")) && /^[A-Z]/.test(prev) && core === core.toUpperCase();
     // single C, D, L, M after "Class"/"Type" are grades ("Class C shares"), not 100, 500...
-    if (((rv && bare !== "I") || (rv && ROMAN_I_CTX.has(prev.toLowerCase().replace(/\.$/, "")))) && !/^[CDLM]$/.test(bare)) {
-      const pl = prev.toLowerCase();
+    if (((rv && bare !== "I") || (rv && loneI)) && !/^[CDLM]$/.test(bare)) {
+      const pl = prev.toLowerCase(), plb = pl.replace(/\.$/, "");
       if (REGNAL.has(pl.replace(/,$/, "")) && /^[A-Z]/.test(prev) && isUpper(core)) return ["the " + ordinal(rv), null];
-      if (ROMAN_CTX.has(pl) || ROMAN_CTX.has(pl.replace(/\.$/, "")) || (i === 0 && blockType === "heading")) return [cardinal(rv), null];
+      // contexts like "type", "stage", "class" take a numeral only when it is written in capitals ("Type II", not "stage x")
+      const ok = ROMAN_CTX.has(pl) || ROMAN_CTX.has(plb);
+      // "in Section I." keeps its full stop (splitPunct reads "I." as an initial)
+      const stop = core.endsWith(".") && (!nxt || /^[A-Z]/.test(nxt)) ? "." : "";
+      if ((ok && (!ROMAN_CTX_UPPER.has(plb) || isUpper(core))) || (i === 0 && blockType === "heading")) return [cardinal(rv) + stop, null];
     }
     if (core.toUpperCase() === "I." && i === 0 && blockType === "heading") return ["one", null];
     if (archaic) {

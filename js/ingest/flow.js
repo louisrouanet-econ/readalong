@@ -24,11 +24,23 @@ class WordSink {
   space() { this.spaceBefore = true; }
 }
 
-// a table cell is not read when it is a number or a short label ("Betting Fraction", "$55,427"); long cells
-// (pages that use tables for layout) are ordinary text
-function isCellText(words) {
-  const txt = words.map((w) => w.t).join(" ");
-  return (txt.match(/\p{L}/gu) || []).length < 3 || (words.length <= 12 && !/[.!?]["'”’)\]]*$/.test(txt));
+// A cell of a data table is not read when it is a number or a short label ("Betting Fraction", "$55,427").
+// Whether a table holds data is decided for the whole table: pages that use a table for layout (an article in
+// one big cell) are read normally, short paragraphs and bylines included.
+function cellIsShort(txt) {
+  txt = txt.replace(/\s+/g, " ").trim();
+  const n = txt ? txt.split(" ").length : 0;
+  return (txt.match(/\p{L}/gu) || []).length < 3 || (n <= 12 && !/[.!?]["'”’)\]]*$/.test(txt));
+}
+const isCellText = (words) => cellIsShort(words.map((w) => w.t).join(" "));
+const tableKind = new WeakMap();
+function isDataTable(table, cellTexts) {
+  if (tableKind.has(table)) return tableKind.get(table);
+  const cells = cellTexts(table).filter((s) => s.trim());
+  const data = cells.length >= 4 && cells.every((s) => s.split(/\s+/).length <= 40) &&
+    cells.filter(cellIsShort).length >= 0.7 * cells.length;
+  tableKind.set(table, data);
+  return data;
 }
 const kids = (el, local) => [...el.children].filter((c) => c.localName === local);
 const firstKid = (el, local) => [...el.children].find((c) => c.localName === local) || null;
@@ -74,9 +86,10 @@ export async function extractDocx(bytes) {
     if (style.startsWith("heading") || style === "title" || style === "subtitle") t = "heading";
     else if (style.includes("caption")) t = "caption";
     else if (style.includes("footnote") || style.includes("endnote")) t = "footnote";
-    let inTable = false;
-    for (let a = p.parentNode; a && a !== body; a = a.parentNode) if (a.localName === "tc") { inTable = true; break; }
-    if (t === "para" && inTable && isCellText(sink.words)) t = "figure";
+    let tbl = null;
+    for (let a = p.parentNode; a && a !== body; a = a.parentNode) if (a.localName === "tbl") { tbl = a; break; }
+    if (t === "para" && tbl && isCellText(sink.words) &&
+        isDataTable(tbl, (x) => [...x.getElementsByTagNameNS(W, "tc")].map((c) => c.textContent))) t = "figure";
     blocks.push({ type: t, words: sink.words });
   }
   const notes = parse("word/footnotes.xml");
@@ -129,7 +142,9 @@ export function extractHtml(html) {
     }
     if (!sink.words.length) return;
     let t = /^h[1-6]$/.test(el.localName) ? "heading" : ["figcaption", "caption"].includes(el.localName) ? "caption" : "para";
-    if (t === "para" && el.closest && el.closest("td,th") && isCellText(sink.words)) t = "figure";
+    const tbl = el.closest && el.closest("table");
+    if (t === "para" && tbl && el.closest("td,th") && isCellText(sink.words) &&
+        isDataTable(tbl, (x) => [...x.querySelectorAll("td,th")].map((c) => c.textContent))) t = "figure";
     blocks.push({ type: t, words: sink.words });
   };
   const walk = (el) => {

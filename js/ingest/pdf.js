@@ -247,7 +247,9 @@ function figureBlocks(blocks, body, W, H) {
   for (const b of blocks) {
     const txt = blockText(b).trim();
     const inBand = b.bbox[1] < 0.15 * H || b.bbox[3] > 0.78 * H;
-    if (/\d/.test(txt) && letterCount(txt) < 3 && !(inBand && PAGENUM.test(txt)) && !FOOTMARK.test(txt.replace(/ /g, ""))) out.add(b);
+    // a lone 1–2 character mark is a footnote marker, not a cell ("1998 2000 2002" on an axis is a cell)
+    const marker = !/\s/.test(txt) && txt.length <= 2 && FOOTMARK.test(txt);
+    if (/\d/.test(txt) && letterCount(txt) < 3 && !(inBand && PAGENUM.test(txt)) && !marker) out.add(b);
   }
   if (out.size < 3) return new Set(); // a lone number is not a table
   const isLabel = (b) => {
