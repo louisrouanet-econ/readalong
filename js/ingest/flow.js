@@ -4,13 +4,14 @@ const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
 class WordSink {
   constructor() { this.words = []; this.spaceBefore = true; }
-  add(text, sup = false) {
+  add(text, sup = false, it = false) {
     if (!text) return;
     for (const part of text.split(/(\s+)/)) {
       if (!part) continue;
       if (/^\s+$/.test(part)) { this.spaceBefore = true; continue; }
       const w = { t: part };
       if (sup && FOOTMARK.test(part)) w.sup = 1;
+      if (it) w.it = 1;
       const last = this.words[this.words.length - 1];
       if (!this.spaceBefore && last) {
         if (sup || last.sup) w.glue = 1;
@@ -23,6 +24,12 @@ class WordSink {
   space() { this.spaceBefore = true; }
 }
 
+// a table cell is not read when it is a number or a short label ("Betting Fraction", "$55,427"); long cells
+// (pages that use tables for layout) are ordinary text
+function isCellText(words) {
+  const txt = words.map((w) => w.t).join(" ");
+  return (txt.match(/\p{L}/gu) || []).length < 3 || (words.length <= 12 && !/[.!?]["'”’)\]]*$/.test(txt));
+}
 const kids = (el, local) => [...el.children].filter((c) => c.localName === local);
 const firstKid = (el, local) => [...el.children].find((c) => c.localName === local) || null;
 const attr = (el, name) => (el ? el.getAttributeNS(W, name) || el.getAttribute("w:" + name) : null);
@@ -32,8 +39,10 @@ function docxRuns(p, sink) {
     const rpr = firstKid(r, "rPr");
     const va = rpr && firstKid(rpr, "vertAlign");
     const sup = !!va && attr(va, "val") === "superscript";
+    const iEl = rpr && firstKid(rpr, "i");
+    const it = !!iEl && !["0", "false"].includes(attr(iEl, "val"));
     for (const c of r.children) {
-      if (c.localName === "t") sink.add(c.textContent, sup);
+      if (c.localName === "t") sink.add(c.textContent, sup, it);
       else if (["tab", "br", "cr"].includes(c.localName)) sink.space();
       else if (c.localName === "footnoteReference") sink.add(attr(c, "id") || "", true);
     }
@@ -65,6 +74,9 @@ export async function extractDocx(bytes) {
     if (style.startsWith("heading") || style === "title" || style === "subtitle") t = "heading";
     else if (style.includes("caption")) t = "caption";
     else if (style.includes("footnote") || style.includes("endnote")) t = "footnote";
+    let inTable = false;
+    for (let a = p.parentNode; a && a !== body; a = a.parentNode) if (a.localName === "tc") { inTable = true; break; }
+    if (t === "para" && inTable && isCellText(sink.words)) t = "figure";
     blocks.push({ type: t, words: sink.words });
   }
   const notes = parse("word/footnotes.xml");
@@ -108,12 +120,16 @@ export function extractHtml(html) {
     const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     let n;
     while ((n = walker.nextNode())) {
-      let sup = false;
-      for (let p = n.parentNode; p && p !== el; p = p.parentNode) if (p.localName === "sup") { sup = true; break; }
-      sink.add(n.nodeValue, sup);
+      let sup = false, it = false;
+      for (let p = n.parentNode; p && p !== el; p = p.parentNode) {
+        if (p.localName === "sup") sup = true;
+        if (["i", "em", "cite"].includes(p.localName)) it = true;
+      }
+      sink.add(n.nodeValue, sup, it);
     }
     if (!sink.words.length) return;
-    const t = /^h[1-6]$/.test(el.localName) ? "heading" : ["figcaption", "caption"].includes(el.localName) ? "caption" : "para";
+    let t = /^h[1-6]$/.test(el.localName) ? "heading" : ["figcaption", "caption"].includes(el.localName) ? "caption" : "para";
+    if (t === "para" && el.closest && el.closest("td,th") && isCellText(sink.words)) t = "figure";
     blocks.push({ type: t, words: sink.words });
   };
   const walk = (el) => {

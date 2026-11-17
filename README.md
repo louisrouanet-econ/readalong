@@ -6,7 +6,8 @@ ReadAlong turns a reading into an audiobook you can follow word by word. Drop in
 
 It was made for course readings, so the voice reads them the way a person would:
 
-- **Skipped by default:** running headers, page numbers, footnote markers, margin notes, JSTOR cover pages, reference lists and in-text citations such as *(Olson 1982, 23)*. Each can be switched back on.
+- **Skipped by default:** running headers, page numbers, footnote markers, margin notes, JSTOR cover pages, reference lists, in-text citations such as *(Olson 1982, 23)*, and the numbers and labels inside charts and tables (their titles are read). Each can be switched back on.
+- **Layout:** each bulleted item is read as its own line with a short pause, and the author of an epigraph is not run into the next paragraph.
 - **Numbers:** *1850* is read "eighteen fifty", *pp. 567-576* "pages five hundred sixty-seven to five hundred seventy-six", *CHAP. XIII* "chapter thirteen", *Louis XIV* "Louis the fourteenth" and *$3 million* "three million dollars".
 - **Names:** about 60 names the voice gets wrong are built in (Bastiat, Tocqueville, Hayek, Mises, Rousseau, Keynes…). The **Names** panel lists every unusual word in a reading, lets you hear it, and lets you fix it by typing how it sounds (`bah-stee-AH`). Only the sentences containing that word are re-voiced.
 - **Old spellings:** in early-modern texts (Hobbes), *warre*, *onely* and *ariseth* are pronounced properly.

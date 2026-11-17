@@ -41,7 +41,13 @@ const REGNAL = new Set(["edward", "henry", "louis", "george", "charles", "willia
   "felipe", "ludwig", "victor", "umberto", "mary", "anne"]);
 const ROMAN_CTX = new Set(["war", "chapter", "chap", "chap.", "ch.", "ch", "book", "bk.", "part", "pt.", "vol.", "volume",
   "section", "sec.", "article", "art.", "act", "scene", "letter", "no.", "number", "appendix", "lecture", "essay", "canto",
-  "psalm", "title", "amendment", ...REGNAL]);
+  "psalm", "title", "amendment", "type", "class", "phase", "stage", "level", "tier", "exhibit", "table", "figure", "fig.",
+  "series", ...REGNAL]);
+// words after which a lone "I" is the numeral one ("Section I", "World War I", "Type I error"), not the pronoun
+const ROMAN_I_CTX = new Set(["chapter", "chap", "book", "part", "vol", "volume", "section", "sec", "appendix", "act",
+  "article", "art", "war", "type", "class", "phase", "stage", "level", "tier", "exhibit", "table", "figure", "fig",
+  "lecture", "essay", "title", "series"]);
+const ARTICLE_LIKE = new Set(["the", "a", "an", "this", "that", "these", "those", "his", "her", "their", "our", "its", "my", "your"]);
 const ROMAN_RE = /^(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/;
 const ROMAN_VAL = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
 const SYMBOLS = { "&": "and", "§": "section", "§§": "sections", "¶": "paragraph", "%": "percent", "°": "degrees",
@@ -70,6 +76,7 @@ const CITE_LOWER_OK = new Set(["see", "and", "et", "al", "also", "e.g", "cf", "p
   "ch", "n", "esp", "vol", "no", "i.e", "the", "of", "von", "de", "van", "der", "forthcoming", "emphasis", "added",
   "quoted", "cited"]);
 
+const TITLE_SMALL = new Set(["a", "an", "the", "of", "and", "or", "on", "in", "to", "for", "with", "at", "by", "from", "de", "la", "le"]);
 const isUpper = (s) => s === s.toUpperCase() && s !== s.toLowerCase();
 const isLower = (s) => s === s.toLowerCase() && s !== s.toUpperCase();
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
@@ -147,7 +154,17 @@ export function numberWords(core, prev = "", nxt = "", allowYear = true) {
 export class Normalizer {
   constructor(lexicon, options = {}) {
     this.lex = lexicon;
-    this.opts = { readCitations: false, readUrls: false, ...options };
+    this.opts = { readCitations: false, readUrls: false, capWords: new Set(), ...options };
+  }
+
+  /** Capitalised words of the whole reading (to tell "Lewis’" from the plural "Vanderbilts’"). */
+  static capWords(texts) {
+    const s = new Set();
+    for (const t of texts) {
+      const c = splitPunct(t.replace(/’/g, "'"))[1].replace(/'s$/, "");
+      if (/^\p{Lu}\p{Ll}/u.test(c)) s.add(c);
+    }
+    return s;
   }
 
   detectArchaic(words) {
@@ -167,7 +184,16 @@ export class Normalizer {
       let [lead, core, trail] = cores[i];
       const prev = i > 0 ? cores[i - 1][1] : "", nxt = i + 1 < n ? cores[i + 1][1] : "";
       let [say, ipa] = this.core(core, prev, nxt, i, blockType, archaic, allCapsBlock, tok);
-      if (say == null) say = core;
+      // "bond A, with...", "plan A and plan B": a capital A inside a sentence, not before a capitalised word, is the letter
+      if (core === "A" && !tok.lex && i > 0 && /[\p{L}\d]$/u.test(toks[i - 1].text) && !allCapsBlock && !/^[A-Z]/.test(nxt)) {
+        say = core; ipa = ["A", "/ˈA/"];
+      }
+      if (say == null) {
+        say = core;
+        // "Lewis’ book" is said "Lewis's"; plurals ("the Vanderbilts’ fortune") are left alone
+        if (trail.startsWith("'") && !lead.includes("'") && /^\p{Lu}\p{Ll}+s$/u.test(core) && !core.endsWith("ss") &&
+            !this.opts.capWords.has(core.slice(0, -1))) { say = core + "'s"; trail = trail.slice(1); }
+      }
       if (Array.isArray(say)) { const [s, suf] = say; say = s; if (pendingSuffix) say += " " + pendingSuffix; pendingSuffix = suf; }
       else if (pendingSuffix) { say = say + " " + pendingSuffix; pendingSuffix = null; }
       if (say === "" && core) { tok.say = tok.plain = ""; return; }
@@ -175,7 +201,32 @@ export class Normalizer {
       if (ipa) { tok.say = `${lead}[${ipa[0]}](${ipa[1]})${trail}`; tok.plain = `${lead}${ipa[0]}${trail}`; }
       else tok.say = tok.plain = `${lead}${say}${trail}`;
     });
+    this.titlePauses(toks, cores);
     return toks;
+  }
+
+  /** A book title set in italics and run into the sentence ("Lewis's Liar's Poker together with...") gets the
+   *  small pause a narrator makes after it. Only for runs of at least two capitalised italic words not preceded
+   *  by "the"/"a"/"his"..., so defined terms ("the Expected Utility you get") are left alone. */
+  titlePauses(toks, cores) {
+    const n = toks.length;
+    let i = 0;
+    while (i < n) {
+      if (!toks[i].it || !toks[i].say) { i++; continue; }
+      let j = i;
+      while (j + 1 < n && toks[j + 1].it && toks[j + 1].say) j++;
+      const run = cores.slice(i, j + 1);
+      const caps = run.filter(([, c]) => /^\p{Lu}/u.test(c)).length;
+      const okWords = run.every(([, c]) => /^\p{Lu}/u.test(c) || TITLE_SMALL.has(c.toLowerCase()));
+      const lastTrail = run[run.length - 1][2], innerPunct = run.slice(0, -1).some(([, , tr]) => /[.,;:!?]/.test(tr));
+      const before = i > 0 ? cores[i - 1][1].toLowerCase() : "";
+      const next = j + 1 < n ? cores[j + 1] : null;
+      if (j > i && caps >= 2 && okWords && !innerPunct && /^\p{Lu}/u.test(run[run.length - 1][1]) && !lastTrail &&
+          next && !next[0] && /^\p{Ll}/u.test(next[1]) && !ARTICLE_LIKE.has(before)) {
+        toks[j].say += ","; toks[j].plain += ",";
+      }
+      i = j + 1;
+    }
   }
 
   markCitations(toks) {
@@ -227,6 +278,10 @@ export class Normalizer {
         return [core, [core.replace("’", "'"), hit[1].slice(0, -1) + suf + "/"]];
       }
     }
+    // a row of dashes is a printed separator ("- - - - -"), not a series of pauses
+    if (/^[-–—]+$/.test(core) && (i === 0 || /^[-–—]+$/.test(prev) || /^[-–—]+$/.test(nxt))) return ["", null];
+    // "US" in running text is the country, not "us"
+    if (core === "US" && !allCapsBlock) return [core, ["US", "/jˌuˈɛs/"]];
     if (core in SYMBOLS) return [SYMBOLS[core], null];
     if (ABBR[core]) {
       let [spoken, needsNum] = ABBR[core];
@@ -257,7 +312,8 @@ export class Normalizer {
     }
     const rv = romanValue(core);
     const bare = core.toUpperCase().replace(/\.$/, "");
-    if ((rv && bare !== "I") || (rv && ["chapter", "chap", "book", "part", "vol", "volume"].includes(prev.toLowerCase().replace(/\.$/, "")))) {
+    // single C, D, L, M after "Class"/"Type" are grades ("Class C shares"), not 100, 500...
+    if (((rv && bare !== "I") || (rv && ROMAN_I_CTX.has(prev.toLowerCase().replace(/\.$/, "")))) && !/^[CDLM]$/.test(bare)) {
       const pl = prev.toLowerCase();
       if (REGNAL.has(pl.replace(/,$/, "")) && /^[A-Z]/.test(prev) && isUpper(core)) return ["the " + ordinal(rv), null];
       if (ROMAN_CTX.has(pl) || ROMAN_CTX.has(pl.replace(/\.$/, "")) || (i === 0 && blockType === "heading")) return [cardinal(rv), null];
@@ -290,6 +346,7 @@ export function buildTokens(words, ids, known) {
       continue;
     }
     toks.push(new Token(t, [wid]));
+    if (w.it) toks[toks.length - 1].it = true;
   }
   return toks;
 }

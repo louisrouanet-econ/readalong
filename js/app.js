@@ -45,7 +45,7 @@ function download(blob, name) {
 
 // ======================================================================= settings
 const DEFAULTS = { voice: "af_heart", pace: 1, readFootnotes: false, readCitations: false, readReferences: false,
-  readCaptions: true, readHeaders: false, engine: "auto", quality: "standard" };
+  readCaptions: true, readHeaders: false, readFigures: false, engine: "auto", quality: "standard" };
 const settings = { ...DEFAULTS, ...store.get("settings", {}) };
 const saveSettings = () => store.set("settings", settings);
 const VOICES = [
@@ -55,7 +55,10 @@ const VOICES = [
   ["am_puck", "Puck", "male", "C+"], ["af_nova", "Nova", "", "C"], ["af_alloy", "Alloy", "", "C"],
 ];
 const planSig = (lex) => JSON.stringify([settings.readFootnotes, settings.readCitations, settings.readReferences,
-  settings.readCaptions, settings.readHeaders, lex.version(), 3]);
+  settings.readCaptions, settings.readHeaders, !!settings.readFigures, lex.version(), 4]);
+// bump when text extraction improves: readings added earlier are re-read from their file when next opened
+const EXTRACT_VERSION = 2;
+const typeName = (t) => ({ para: "part", figure: "chart or table text" }[t] || t);
 const voiceSig = () => `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts|3`;
 
 // ======================================================================= shared resources
@@ -123,13 +126,19 @@ async function addFiles(files) {
 }
 
 /** Extract text and build the speech plan (re-used for re-extraction and pronunciation changes). */
-async function prepare(id, { reextract = false, forceOcr = false } = {}) {
+async function prepare(id, { reextract = false, forceOcr = false, upgrade = false } = {}) {
   await dictP; const lex = await lexP;
   const h = await heavy(id);
-  if (!h.view || reextract || forceOcr) {
+  if (!h.view || reextract || forceOcr || upgrade) {
     await setMeta(id, { status: "reading", message: "Reading the file" });
-    const ex = await extract(h.bytes, { forceOcr, onProgress: (msg) => setMeta(id, { message: msg }) });
+    // an automatic upgrade never runs OCR again (slow) and never replaces text that came from OCR
+    const ex = await extract(h.bytes, { forceOcr, skipOcr: upgrade, onProgress: (msg) => setMeta(id, { message: msg }) });
+    h.exv = EXTRACT_VERSION;
+    if (upgrade && h.forcedOcr) return finishPlan(id, h, lex);
+    if (upgrade && ex.needOcr && ex.needOcr.length) keepOcrPages(ex, h.view, new Set(ex.needOcr));
     if (!ex.blocks.some((b) => b.words.length)) throw new Error("No text found in this file.");
+    if (forceOcr) h.forcedOcr = true; else if (reextract) delete h.forcedOcr;
+    h.overrides = {}; // per-passage choices refer to the old passages
     h.view = layout(ex);
     h.pages = ex.pages;
     h.kind = ex.kind;
@@ -137,6 +146,20 @@ async function prepare(id, { reextract = false, forceOcr = false } = {}) {
     const title = ex.title && ex.title.length > 3 && !m.titleLocked ? ex.title : m.title;
     await setMeta(id, { kind: ex.kind, title, pages: ex.pages.length });
   }
+  return finishPlan(id, h, lex);
+}
+/** On an automatic upgrade, pages that needed OCR keep the text OCR found the first time (OCR is slow). */
+function keepOcrPages(ex, oldView, pages) {
+  const old = oldView.blocks.map((b) => ({ type: b.type, words: oldView.words.slice(b.w0, b.w1) }))
+    .filter((b) => b.words.length && b.words.every((w) => pages.has(w.p)))
+    .map((b) => ({ type: b.type, words: b.words.map(({ k, g, ...w }) => (g ? { ...w, glue: 1 } : w)) }));
+  for (const b of old) {
+    const p = b.words[0].p;
+    const at = ex.blocks.findIndex((x) => x.words.length && x.words[0].p > p);
+    ex.blocks.splice(at < 0 ? ex.blocks.length : at, 0, b);
+  }
+}
+async function finishPlan(id, h, lex) {
   await setMeta(id, { status: "reading", message: "Working out what to say" });
   const plan = await buildPlan(h.view, settings, lex, h.overrides || {}, () => {});
   Object.assign(h, { plan: plan.chunks, sentences: plan.sentences, names: plan.names, archaic: plan.archaic, sig: planSig(lex) });
@@ -382,6 +405,7 @@ async function openReader(id, { keepWord } = {}) {
   }
   await dictP; const lex = await lexP;
   let h = await heavy(id);
+  if (h.kind === "pdf" && (h.exv || 1) < EXTRACT_VERSION) { await prepare(id, { upgrade: true }); return; } // better extraction available
   if (h.sig !== planSig(lex)) { await prepare(id); return; } // settings or pronunciations changed: re-plan
   R.h = h;
   R.view = h.view;
@@ -551,7 +575,7 @@ function renderText(view) {
       const t = joined ? w.t.replace(/[-‐­]$/, "") : w.t;
       inner += `<span class="w${w.sup ? " sup" : ""}" data-i="${i}">${esc(t)}</span>`;
     }
-    const label = b.spoken ? "Don't read this" : `Read this ${b.type === "para" ? "part" : b.type}`;
+    const label = b.spoken ? "Don't read this" : `Read this ${typeName(b.type)}`;
     return `<${tag} class="blk${b.spoken ? "" : " skip"}" data-b="${bi}">${inner}<button class="link blk-tog" data-tog="${bi}">${label}</button></${tag}>`;
   });
   view.innerHTML = `<div class="textcol">${parts.join("")}</div>`;
@@ -755,7 +779,7 @@ $("#docview").addEventListener("click", (e) => {
   if (best < 0 || bd > 400) return;
   if (R.wordChunk[best] < 0) {
     const b = R.view.blocks[R.view.words[best].k];
-    toast(`This ${b.type === "para" ? "part" : b.type} is not read aloud. In the Text view you can switch it on.`, 3500);
+    toast(`This ${typeName(b.type)} is not read aloud. In the Text view you can switch it on.`, 3500);
     return;
   }
   seekToWord(best, true);
@@ -997,7 +1021,8 @@ async function openSettings() {
       <p class="fine">How fast the voice is produced. You can also change the playback speed while listening.</p></div>
     <div class="field"><span class="label">What is read aloud</span>
       ${[["readCitations", "In-text citations such as (Olson 1982, 23)"], ["readFootnotes", "Footnotes"], ["readReferences", "Reference lists and endnotes"],
-        ["readCaptions", "Figure and table captions"], ["readHeaders", "Running headers and page numbers"]]
+        ["readCaptions", "Figure and table captions"], ["readFigures", "Text inside charts and tables (numbers, labels)"],
+        ["readHeaders", "Running headers and page numbers"]]
         .map(([k, l]) => `<label class="check"><input type="checkbox" data-k="${k}" ${settings[k] ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
     <div class="field"><span class="label">Voice engine</span>
       <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${gpu ? " (graphics card)" : " (processor)"}</option>

@@ -10,6 +10,7 @@ const REF_HEAD = /^(references|bibliography|works cited|literature cited|notes|e
 const PAGENUM = /^[\s\-–—]*([\divxlcdm]{1,6})[\s\-–—.]*$/i;
 const NUM_HEAD = /^\(?(\d{1,2}(\.\d{1,2})*[.)]|[IVXLC]{1,6}[.)]?)\s+\S/;
 const TERMINAL = /[.!?]["'”’)\]]*$/;
+const BULLET = /^[•▪◦●■□‣∙⁃➢►✓✔]/;
 
 const fixChars = (s) => s.replace(/[­«»ﬀ-ﬄ]/g, (c) => CHAR_FIX[c] ?? c);
 
@@ -71,7 +72,9 @@ function fontInfo(page, fontName, styles) {
   let name = "";
   try { const f = page.commonObjs.get(fontName); name = (f && (f.name || f.loadedName)) || ""; } catch { /* not loaded */ }
   const fam = (styles[fontName] && styles[fontName].fontFamily) || "";
-  return { bold: /bold|black|heavy|semibold|demi/i.test(name), family: fam, name };
+  // font names (e.g. "ABCDEF+BemboStd-Italic") need fontExtraProperties: true on getDocument
+  return { bold: /bold|black|heavy|semibold|demi/i.test(name), italic: /italic|oblique|-it$|boldit$/i.test(name.replace(/^[A-Z]{6}\+/, "")),
+    family: fam, name };
 }
 
 async function pageBlocks(page, pdfjs, repairSpacing = false) {
@@ -97,7 +100,7 @@ async function pageBlocks(page, pdfjs, repairSpacing = false) {
       if (/\s/.test(c)) { cur = null; x += w; return; }
       if (!cur) {
         cur = { t: "", b: [x, base - fh * 0.8, x, base + fh * 0.22], sz: Math.round(fh * 2) / 2, base, bold: fi.bold,
-          spaceBefore: k > 0 || startsSpace, sup: false };
+          it: fi.italic, spaceBefore: k > 0 || startsSpace, sup: false };
         frags.push(cur);
       }
       cur.t += c;
@@ -137,7 +140,7 @@ async function pageBlocks(page, pdfjs, repairSpacing = false) {
         prev.spaceAfter = f.spaceAfter;
         continue;
       }
-      const w = { t: f.t, b: f.b.slice(), sz: f.sz, bold: f.bold, sup, spaceAfter: f.spaceAfter };
+      const w = { t: f.t, b: f.b.slice(), sz: f.sz, bold: f.bold, it: f.it, sup, spaceAfter: f.spaceAfter };
       if (sup && prev && gap < 0.3 * ln.maxSz) w.glue = 1;
       words.push(w);
     }
@@ -222,6 +225,56 @@ function besideBody(b, blocks) {
     Math.min(y1, o.bbox[3]) - Math.max(y0, o.bbox[1]) > 0.5 * (y1 - y0) && (o.bbox[2] - o.bbox[0]) > 2 * (x1 - x0));
 }
 
+// ------------------------------------------------------------------ charts and tables
+// "Table 3.1 Calculating Expected Payout", "Figure 2: Growth of ...", "Exhibit 2.1 Summary of ..."
+const CAPTION_HEAD = /^(Table|Tab\.|Figure|Fig\.|Exhibit|Chart|Graph|Panel|Box|Map|Plate|Illustration)\s+([A-Z]?\d+[A-Za-z]?([.\-–]\d+)*|[IVXLC]+)\b[.:]?/;
+const TITLE_SMALL = new Set(["a", "an", "the", "of", "and", "or", "on", "in", "to", "for", "with", "at", "by", "from", "vs", "vs.", "per", "as", "into", "over", "under", "between"]);
+function isCaptionTitle(b) {
+  const txt = blockText(b).trim();
+  const m = txt.match(CAPTION_HEAD);
+  if (!m || b.lines.length > 3) return false;
+  const rest = txt.slice(m[0].length).match(/[\p{L}][\p{L}'’-]*/gu) || [];
+  if (!rest.length) return true;
+  // a title is in Title Case; "Table 3.1 shows that the..." is a sentence of the text
+  const big = rest.filter((w) => !TITLE_SMALL.has(w.toLowerCase()));
+  return big.length > 0 && big.filter((w) => /^\p{Lu}/u.test(w)).length >= 0.75 * big.length;
+}
+const letterCount = (s) => (s.match(/\p{L}/gu) || []).length;
+/** Blocks that are the inside of a chart or table: cells that are only numbers, and short labels next to them.
+ *  They are kept on the page but not read (they make no sense read in a row). */
+function figureBlocks(blocks, body, W, H) {
+  const out = new Set();
+  for (const b of blocks) {
+    const txt = blockText(b).trim();
+    const inBand = b.bbox[1] < 0.15 * H || b.bbox[3] > 0.78 * H;
+    if (/\d/.test(txt) && letterCount(txt) < 3 && !(inBand && PAGENUM.test(txt)) && !FOOTMARK.test(txt.replace(/ /g, ""))) out.add(b);
+  }
+  if (out.size < 3) return new Set(); // a lone number is not a table
+  const isLabel = (b) => {
+    const txt = blockText(b).trim();
+    const nwords = b.lines.reduce((a, l) => a + l.words.length, 0);
+    const size = Math.max(...b.lines.map((l) => l.size));
+    return nwords <= 12 && b.lines.length <= 3 && size < 1.12 * body && !TERMINAL.test(txt) && !/^[—―]/.test(txt) && !CAPTION_HEAD.test(txt);
+  };
+  const near = (a, c) => {
+    const dx = Math.max(0, Math.max(a.bbox[0], c.bbox[0]) - Math.min(a.bbox[2], c.bbox[2]));
+    const dy = Math.max(0, Math.max(a.bbox[1], c.bbox[1]) - Math.min(a.bbox[3], c.bbox[3]));
+    return dy < 3 * body && dx < 0.5 * W;
+  };
+  // grow the region from the numeric cells: a label counts when two parts of the chart/table are close by
+  for (let pass = 0; pass < 6; pass++) {
+    let added = 0;
+    for (const b of blocks) {
+      if (out.has(b) || !isLabel(b)) continue;
+      let n = 0;
+      for (const c of out) if (near(b, c) && ++n >= 2) break;
+      if (n >= 2) { out.add(b); added++; }
+    }
+    if (!added) break;
+  }
+  return out;
+}
+
 function classify(pagesBlocks, dims, body, boldSignal, scanned) {
   const nPages = pagesBlocks.length;
   const band = [];
@@ -246,6 +299,7 @@ function classify(pagesBlocks, dims, body, boldSignal, scanned) {
   pagesBlocks.forEach((blocks, p) => {
     const [W, H] = dims[p];
     const cover = p === 0 && isCover(blocks);
+    const fig = figureBlocks(blocks, body, W, H);
     for (const b of blocks) {
       const txt = blockText(b).trim();
       const words = b.lines.flatMap((l) => l.words);
@@ -267,8 +321,10 @@ function classify(pagesBlocks, dims, body, boldSignal, scanned) {
       else if (size >= 1.3 * body && nwords <= 25 && !/^[\d\W]+$/.test(txt)) t = "heading";
       else if ((inBand || y0 < 0.15 * H || y1 > 0.78 * H) && PAGENUM.test(txt)) t = "header";
       else if (inBand && (/^[\divxlcdm.\-– ]+$/i.test(txt) || (nwords <= 20 && nPages > 1 && (repeats(p, txt) || size < 0.95 * body)))) t = "header";
+      else if (isCaptionTitle(b)) t = "caption";
+      else if (fig.has(b)) t = "figure";
       else if (b.lines.length === 1 && nwords <= 12 && NUM_HEAD.test(txt) && !/[-,]$/.test(txt) && size >= 0.8 * body) t = "heading";
-      else if (boldSignal && nwords <= 12 && b.lines.length <= 2 && words.every((w) => w.bold) && !TERMINAL.test(txt)) t = "heading";
+      else if (boldSignal && nwords <= 12 && b.lines.length <= 2 && words.every((w) => w.bold) && !TERMINAL.test(txt) && /\p{L}{2}/u.test(txt)) t = "heading";
       else if ((x1 - x0) < 0.26 * W && size < 0.95 * body && (x0 > 0.55 * W || x1 < 0.45 * W) && besideBody(b, blocks)) t = "margin";
       else if (size < small * body && y0 > 0.5 * H && !(scanned && nwords <= 3)) t = "footnote";
       else if (nwords <= 20 && b.lines.length <= 4 && (size >= 1.15 * body || (upperRatio > 0.8 && letters.length >= 3))) t = "heading";
@@ -332,6 +388,8 @@ function paragraphs(orderedPages) {
     deferred.length = 0;
   };
   orderedPages.forEach((blocks, p) => {
+    const paraBlocks = blocks.filter((b) => b.type === "para");
+    const pageRight = paraBlocks.length ? Math.max(...paraBlocks.map((b) => b.bbox[2])) : Infinity;
     for (const b of blocks) {
       let t = b.type;
       const words = [];
@@ -339,6 +397,7 @@ function paragraphs(orderedPages) {
         const ww = { t: w.t, p, b: w.b.map((v) => Math.round(v * 10) / 10) };
         if (w.sup) ww.sup = 1;
         if (w.glue) ww.glue = 1;
+        if (w.it) ww.it = 1;
         if (wi === 0) ww.nl = 1;
         words.push(ww);
       }));
@@ -365,14 +424,31 @@ function paragraphs(orderedPages) {
         let wi = 0, prevLine = null;
         for (const ln of lines) {
           const n = ln.words.length;
-          if (prevLine) {
+          const lw = words.slice(wi, wi + n);
+          wi += n;
+          const first = ln.words[0].t;
+          const curEnded = !cur || !cur.words.length || TERMINAL.test(cur.words[cur.words.length - 1].t);
+          // "— Nassim Nicholas Taleb": the author of an epigraph stands alone, never joined to the next paragraph
+          if (/^[—―]/.test(first) && n <= 8 && curEnded && lw.filter((w) => /\p{L}/u.test(w.t)).every((w) => /^[—―]?\p{Lu}/u.test(w.t) || /^(de|von|van|der|of|the|and|la|le|du)$/.test(w.t))) {
+            close(); out.push({ type: "para", words: lw }); cur = { type: "para", words: [] };
+            prevLine = null;
+            continue;
+          }
+          // bulleted lists: each item is its own passage (read with a short pause), and the list ends at
+          // the first line that goes back to the margin
+          if (BULLET.test(first)) {
+            close();
+            cur = { type: "para", words: [], item: (ln.words[1] || ln.words[0]).b[0] };
+          } else if (cur && cur.item != null && (ln.bbox[0] < cur.item - 0.4 * em || cur.short) && !/^\p{Ll}/u.test(first)) {
+            close(); cur = { type: "para", words: [] };
+          } else if (prevLine) {
             const indented = ln.bbox[0] > left + 1.2 * em;
             const prevShort = prevLine.bbox[2] < right - 2.5 * em;
             const prevTerm = TERMINAL.test(prevLine.words[prevLine.words.length - 1].t);
             if (prevTerm && (indented || (prevShort && lines.length > 2))) { close(); cur = { type: "para", words: [] }; }
           }
-          cur.words.push(...words.slice(wi, wi + n));
-          wi += n;
+          cur.words.push(...lw);
+          cur.short = ln.bbox[2] < pageRight - 2.5 * em; // the line stops well before the margin
           prevLine = ln;
         }
       } else {
@@ -389,10 +465,13 @@ function paragraphs(orderedPages) {
 
 /** Extract a PDF. data: ArrayBuffer/Uint8Array. opts: {pdfjs, forceOcr, onProgress, ocrPage(page, pdfjs) -> blocks} */
 export async function extractPdf(data, opts) {
-  const { pdfjs, forceOcr = false, onProgress = () => {}, ocrPage = null } = opts;
-  const task = pdfjs.getDocument({ data: new Uint8Array(data), isEvalSupported: false });
+  const { pdfjs, forceOcr = false, onProgress = () => {}, ocrPage = null, skipOcr = false } = opts;
+  // fontExtraProperties: font names are needed to tell bold and italic apart
+  const task = pdfjs.getDocument({ data: new Uint8Array(data), isEvalSupported: false, fontExtraProperties: true });
   const doc = await task.promise;
   const pagesBlocks = [], dims = [], scanned = [];
+  let ocrPages = 0;
+  const needOcr = []; // pages (0-based) that would need OCR but were skipped (skipOcr)
   for (let p = 1; p <= doc.numPages; p++) {
     onProgress(`Reading page ${p} of ${doc.numPages}`, (p - 1) / doc.numPages);
     const page = await doc.getPage(p);
@@ -403,8 +482,12 @@ export async function extractPdf(data, opts) {
     let blocks = forceOcr ? [] : await pageBlocks(page, pdfjs, geo.scan);
     const nchar = blocks.reduce((a, b) => a + b.lines.reduce((x, l) => x + l.words.reduce((y, w) => y + w.t.length, 0), 0), 0);
     if ((forceOcr || (nchar < 25 && geo.hasImages)) && ocrPage) {
-      onProgress(`Recognising text on page ${p} of ${doc.numPages} (OCR)`, (p - 1) / doc.numPages);
-      blocks = await ocrPage(page, pdfjs);
+      if (skipOcr && !forceOcr) needOcr.push(p - 1);
+      else {
+        onProgress(`Recognising text on page ${p} of ${doc.numPages} (OCR)`, (p - 1) / doc.numPages);
+        blocks = await ocrPage(page, pdfjs);
+        ocrPages++;
+      }
     }
     pagesBlocks.push(blocks);
     page.cleanup();
@@ -427,7 +510,7 @@ export async function extractPdf(data, opts) {
   let title = "";
   try { const md = await doc.getMetadata(); title = (md.info && md.info.Title) || ""; } catch { /* none */ }
   await task.destroy();
-  return { kind: "pdf", title: String(title).trim(), pages: dims.map(([w, h]) => ({ w: Math.round(w * 100) / 100, h: Math.round(h * 100) / 100 })), blocks: paras, bodySize: body };
+  return { kind: "pdf", title: String(title).trim(), pages: dims.map(([w, h]) => ({ w: Math.round(w * 100) / 100, h: Math.round(h * 100) / 100 })), blocks: paras, bodySize: body, ocrPages, needOcr };
 }
 
 export { mkLine, mkBlock };

@@ -28,12 +28,12 @@ function decodeText(bytes) {
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return new TextDecoder("windows-1252").decode(bytes); }
 }
 
-export async function extract(bytes, { forceOcr = false, onProgress = () => {} } = {}) {
+export async function extract(bytes, { forceOcr = false, skipOcr = false, onProgress = () => {} } = {}) {
   const kind = detect(bytes);
   if (kind === "pdf") {
     const pdfjs = await loadPdfjs();
     const { ocrPage } = await import("./ocr.js");
-    return extractPdf(bytes, { pdfjs, forceOcr, onProgress, ocrPage });
+    return extractPdf(bytes, { pdfjs, forceOcr, skipOcr, onProgress, ocrPage });
   }
   if (kind === "docx" || kind === "zip") {
     try { return await extractDocx(bytes); } catch (e) { if (kind === "zip") throw new Error("This zip file is not a Word document."); throw e; }

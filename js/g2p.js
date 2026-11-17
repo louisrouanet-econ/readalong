@@ -236,11 +236,12 @@ export function applyStress(ps, stress) {
 const capStress = (w) => (w === w.toLowerCase() ? null : w.length > 1 && w === w.toUpperCase() ? 2 : 0.5);
 
 /** Phonemes for a list of word strings in running text; resolves 'the/a/to/in' from the next word. */
-export async function phonemizeWords(words) {
+export async function phonemizeWords(words, fixed = []) {
   const ps = new Array(words.length).fill(null);
   const guessed = new Array(words.length).fill(false);
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
+    if (fixed[i] != null) { ps[i] = fixed[i]; continue; } // pronunciation given (name fixes, letters): still context for "the"
     if (FUNCTION_WORDS.has(w) || FUNCTION_WORDS.has(w.toLowerCase())) continue;
     let p = dictWord(w);
     if (p == null && w.includes("-")) {
@@ -279,9 +280,9 @@ export async function phonemizeWords(words) {
  *  Returns an array of phoneme strings (words space-separated, punctuation attached). */
 export async function phonemizeTokens(says, guessedSink) {
   const all = says.map(pieces);
-  const words = [];
-  for (const pcs of all) for (const p of pcs) if (p.w && p.ph == null) words.push(p.w);
-  const { ps, guessed } = await phonemizeWords(words);
+  const words = [], fixed = [];
+  for (const pcs of all) for (const p of pcs) if (p.w) { words.push(p.w); fixed.push(p.ph ?? null); }
+  const { ps, guessed } = await phonemizeWords(words, fixed);
   let k = 0;
   return all.map((pcs) => {
     let out = "";
@@ -292,7 +293,8 @@ export async function phonemizeTokens(says, guessedSink) {
         continue;
       }
       let ph = p.ph;
-      if (ph == null) { ph = ps[k]; if (guessed[k] && guessedSink) guessedSink.add(p.w); k++; }
+      if (ph == null) { ph = ps[k]; if (guessed[k] && guessedSink) guessedSink.add(p.w); }
+      k++;
       if (!ph) continue;
       if (out && !out.endsWith(" ") && !/[“(]$/.test(out)) out += " ";
       out += ph;

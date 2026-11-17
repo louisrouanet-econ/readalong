@@ -6,7 +6,8 @@ import { VOCAB } from "./vocab.js";
 
 const TARGET = 330; // phonemes per chunk: about 2 sentences, which keeps intonation flowing
 const HARD_MAX = 500;
-const PAUSE = { sentence: 0.32, para: 0.7, before_heading: 1.0, after_heading: 0.75, other: 0.55 };
+const PAUSE = { sentence: 0.32, para: 0.7, item: 0.45, before_heading: 1.0, after_heading: 0.75, other: 0.55 };
+const BULLET = /^[•▪◦●■□‣∙⁃➢►✓✔]/;
 
 export function blockIsSpoken(block, settings, override) {
   if (override !== undefined && override !== null) return !!override;
@@ -15,6 +16,7 @@ export function blockIsSpoken(block, settings, override) {
   if (t === "footnote") return !!settings.readFootnotes;
   if (t === "reference") return !!settings.readReferences;
   if (t === "caption") return settings.readCaptions !== false;
+  if (t === "figure") return !!settings.readFigures; // numbers and labels inside charts and tables
   if (t === "header") return !!settings.readHeaders;
   return false;
 }
@@ -31,6 +33,7 @@ export function layout(ex) {
       if (w.nl) o.nl = 1;
       if (w.sup) o.sup = 1;
       if (w.hy) o.hy = 1;
+      if (w.it) o.it = 1;
       words.push(o);
     }
     blocks.push({ type: b.type, w0, w1: words.length });
@@ -44,8 +47,8 @@ export function layout(ex) {
  */
 export async function buildPlan(view, settings, lexicon, overrides = {}, onProgress = () => {}) {
   const { words, blocks } = view;
-  const glueWords = words.map((w) => ({ t: w.t, glue: w.g, sup: w.sup, hy: w.hy }));
-  const norm = new Normalizer(lexicon, { readCitations: !!settings.readCitations });
+  const glueWords = words.map((w) => ({ t: w.t, glue: w.g, sup: w.sup, hy: w.hy, it: w.it }));
+  const norm = new Normalizer(lexicon, { readCitations: !!settings.readCitations, capWords: Normalizer.capWords(words.map((w) => w.t)) });
   const archaic = norm.detectArchaic(words.map((w) => w.t));
   const sentences = [], chunks = [];
   const guessed = new Set();
@@ -68,7 +71,8 @@ export async function buildPlan(view, settings, lexicon, overrides = {}, onProgr
     let curLen = 0;
     const flush = () => {
       if (!cur.length) return;
-      chunks.push(makeChunk(cur, bi, first ? pauseFor(b.type, prevType) : PAUSE.sentence));
+      const lead = b.type === "para" && BULLET.test(words[b.w0].t) ? PAUSE.item : pauseFor(b.type, prevType);
+      chunks.push(makeChunk(cur, bi, first ? lead : PAUSE.sentence));
       first = false;
       cur = []; curLen = 0;
     };
