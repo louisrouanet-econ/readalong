@@ -56,7 +56,7 @@ const VOICES = [
 ];
 const planSig = (lex) => JSON.stringify([settings.readFootnotes, settings.readCitations, settings.readReferences,
   settings.readCaptions, settings.readHeaders, lex.version(), 3]);
-const voiceSig = () => `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts|2`;
+const voiceSig = () => `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts|3`;
 
 // ======================================================================= shared resources
 const dictP = loadDict(new URL("../data/dict.json", import.meta.url));

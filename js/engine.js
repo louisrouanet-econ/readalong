@@ -97,10 +97,12 @@ export class Engine {
     const pcm = new Int16Array(lead + (b - a));
     for (let i = a; i < b; i++) pcm[lead + i - a] = Math.max(-32767, Math.min(32767, Math.round(audio[i] * 32767)));
     const shift = chunk.pause - a / SR;
+    const seg = kokoroTimestamps(chunk.ids, durations);
     const wids = [], s = [], e = [];
     for (const [w, ia, ib] of chunk.spans) {
-      // +1: the model's input starts with a padding token
-      const t0 = cum[ia + 1] * FRAME + shift, t1 = cum[ib + 1] * FRAME + shift;
+      const first = seg.find((g) => g.b > ia), last = [...seg].reverse().find((g) => g.a < ib);
+      if (!first || !last) continue;
+      const t0 = first.s + shift, t1 = Math.max(first.s, last.e) + shift;
       const lens = w.map(() => 1);
       const tot = lens.length;
       w.forEach((wid, k) => {
@@ -116,6 +118,33 @@ export class Engine {
     const m = await this.synth(ids, voice, speed);
     return wav(m.audio);
   }
+}
+
+/** Word timestamps exactly as Kokoro's own pipeline computes them (kokoro/pipeline.py, join_timestamps):
+ *  a word starts in the middle of the space before it, and everything is shifted 3 frames earlier.
+ *  Returns segments of the id sequence between spaces: {a, b (id indices), s, e (seconds)}. */
+export function kokoroTimestamps(ids, durations, spaceId = 16) {
+  const d = Array.from(durations, (x) => Math.max(1, Math.round(x)));
+  let left = 2 * Math.max(0, d[0] - 3), right = left;
+  const out = [];
+  let k = 0;
+  while (k < ids.length) {
+    if (ids[k] === spaceId) { k++; continue; }
+    let m = k;
+    while (m < ids.length && ids[m] !== spaceId) m++;
+    const ws = m < ids.length;
+    const i = k + 1, j = m + 1; // durations are offset by the leading pad token
+    if (j >= d.length) break;
+    let tok = 0;
+    for (let q = i; q < j; q++) tok += d[q];
+    const sp = ws ? d[j] : 0;
+    const s = left / 80;
+    left = right + 2 * tok + sp;
+    out.push({ a: k, b: m, s, e: left / 80 });
+    right = left + sp;
+    k = ws ? m + 1 : m;
+  }
+  return out;
 }
 
 export function wav(samples, rate = SR) {
