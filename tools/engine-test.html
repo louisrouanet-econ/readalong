@@ -1,8 +1,8 @@
-<!doctype html><meta charset="utf-8"><title>engine spike</title>
+<!doctype html><meta charset="utf-8"><title>ReadAlong voice speed test</title><p>Measures how fast this device can produce the voice. Add ?backend=wasm to test the processor only, and &amp;dtype=fp32 or q8 for other model sizes.</p>
 <pre id="log"></pre>
 <script type="module">
-import { ensureIsolation } from "./js/coi.js"; await ensureIsolation();
-import { VOCAB } from "./js/vocab.js";
+import { ensureIsolation } from "../js/coi.js"; await ensureIsolation();
+import { VOCAB } from "../js/vocab.js";
 const log = (s) => (document.getElementById("log").textContent += s + "\n");
 const q = new URLSearchParams(location.search);
 const backend = q.get("backend") || ("gpu" in navigator ? "webgpu" : "wasm");
@@ -10,7 +10,7 @@ const dtype = q.get("dtype") || (backend === "webgpu" ? "fp32" : "q8");
 log(`crossOriginIsolated=${self.crossOriginIsolated} webgpu=${"gpu" in navigator} backend=${backend} dtype=${dtype}`);
 const ph = "ɪn ˌAtˈin fˈɪfti, fɹAdˈAɹɪk bˌɑstiˈɑ ɹˈOt ðæt ðə bɹˈOkən wˈɪndO kˈɔst ðə ʃˈɑpkˌipəɹ sˈɪks fɹˈæŋks. ɪt ɪz nˈɑt sˈin ðæt, æz ˈAvəɹ ʃˈɑpkˌipəɹ hæz spˈɛnt sˈɪks fɹˈæŋks ˌɑn wˈʌn θˈɪŋ, hi kˈænɑt spˈɛnd ðˈɛm ˌɑn ənˈʌðəɹ.";
 const ids = [...ph].map((c) => VOCAB[c]).filter((x) => x !== undefined);
-const w = new Worker(new URL("./js/tts.worker.js", import.meta.url), { type: "module" });
+const w = new Worker(new URL("../js/tts.worker.js", import.meta.url), { type: "module" });
 let t0 = performance.now(), runs = 0;
 w.onmessage = (e) => {
   const m = e.data;

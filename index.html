@@ -1,1 +1,117 @@
-<!doctype html><meta charset="utf-8"><title>ReadAlong</title><p>ReadAlong is being set up. <a href="spike.html">Engine test</a></p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ReadAlong</title>
+<meta name="description" content="Course readings, read aloud while each word is highlighted. Runs entirely in your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f7f6f2'/%3E%3Crect x='6' y='12' width='20' height='9' fill='%23ffd93b'/%3E%3Ctext x='16' y='21' font-family='Georgia' font-size='15' font-style='italic' text-anchor='middle' fill='%231b1a17'%3Ea%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" crossorigin href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- ======================================================== LIBRARY -->
+<main id="library" class="library" hidden>
+  <header class="masthead">
+    <div>
+      <h1 class="wordmark">Read<em>Along</em></h1>
+      <p class="kicker">Readings, read aloud. Everything happens in this browser.</p>
+    </div>
+    <nav class="mast-nav">
+      <button class="link" data-act="settings">Settings</button>
+      <button class="link" data-act="about">About</button>
+    </nav>
+  </header>
+
+  <section class="intake" id="intake">
+    <p class="intake-lede">Drop a PDF, a Word file or a saved web page anywhere on this page.</p>
+    <div class="intake-row">
+      <button class="btn solid" id="pick">Choose a file</button>
+      <input type="file" id="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" hidden>
+      <span class="fine">Scanned PDFs work too. Nothing is uploaded: the text and the voice are produced on this device.</span>
+    </div>
+  </section>
+
+  <section class="shelf">
+    <h2 class="label">Your readings</h2>
+    <ol class="index" id="index"></ol>
+    <p class="empty" id="empty" hidden>Nothing here yet. Add a reading above, or start with one of the texts below.</p>
+  </section>
+
+  <section class="shelf">
+    <h2 class="label">From the public domain</h2>
+    <ol class="index samples" id="samples"></ol>
+  </section>
+
+  <footer class="colophon">
+    <span id="engine-line">Voice: not started</span>
+    <span id="storage-line"></span>
+  </footer>
+</main>
+
+<!-- ======================================================== READER -->
+<section id="reader" class="reader" hidden>
+  <header class="r-head">
+    <button class="link back" data-act="home">← Readings</button>
+    <h1 class="r-title" id="r-title" title="Click to rename"></h1>
+    <span class="r-status" id="r-status"></span>
+    <nav class="r-nav">
+      <span class="tabs" id="viewmode"><button data-mode="page">Page</button><button data-mode="text">Text</button></span>
+      <button class="link" data-act="zoomout" title="Smaller">A−</button>
+      <button class="link" data-act="zoomin" title="Larger">A+</button>
+      <button class="link" data-act="names" title="Check how names are pronounced">Names</button>
+      <button class="link" data-act="settings">Settings</button>
+      <button class="link" data-act="help" title="Keyboard shortcuts">Keys</button>
+      <button class="link" data-act="notes" id="notes-tog">Notes</button>
+    </nav>
+  </header>
+
+  <div class="r-body">
+    <div class="r-scroll" id="scroll"><div id="docview"></div></div>
+    <aside class="margin" id="margin">
+      <header class="m-head">
+        <h2>Marginalia <span id="note-count"></span></h2>
+        <button class="link" id="export">Export</button>
+      </header>
+      <div class="m-body">
+        <div id="composer-slot"></div>
+        <ol class="notes" id="notes"></ol>
+      </div>
+    </aside>
+  </div>
+  <button class="btn solid back-to-voice" id="back-to-voice" hidden>Back to the voice</button>
+
+  <footer class="deck">
+    <div class="transport">
+      <button class="t-btn" data-act="prev" title="Previous sentence (←)" aria-label="Previous sentence">⟨⟨</button>
+      <button class="t-btn" data-act="back10" title="Back 10 seconds (Shift+←)" aria-label="Back 10 seconds">−10</button>
+      <button class="play" id="play" title="Play / pause (Space)" aria-label="Play"><span class="glyph"></span></button>
+      <button class="t-btn" data-act="fwd10" title="Forward 10 seconds (Shift+→)" aria-label="Forward 10 seconds">+10</button>
+      <button class="t-btn" data-act="next" title="Next sentence (→)" aria-label="Next sentence">⟩⟩</button>
+    </div>
+    <div class="timeline">
+      <span class="tc" id="t-cur">0:00</span>
+      <div class="track" id="track" role="slider" aria-label="Position" tabindex="0">
+        <div class="voiced" id="voiced"></div>
+        <div class="played" id="played"></div>
+        <div class="knob" id="knob"></div>
+      </div>
+      <span class="tc" id="t-dur">0:00</span>
+    </div>
+    <div class="deck-right">
+      <button class="t-btn speed" id="speed" title="Playback speed ([ and ])">1.0×</button>
+      <button class="t-btn" id="follow" title="Keep the spoken word in view (F)">Follow</button>
+      <button class="btn accent" data-act="addnote" title="Pause and write a note here (N)">Note</button>
+    </div>
+  </footer>
+</section>
+
+<div class="drop-veil" id="veil" hidden><p>Release to add this reading</p></div>
+<div id="modal-root"></div>
+<div class="toast" id="toast" hidden></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
