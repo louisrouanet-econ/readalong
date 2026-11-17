@@ -38,6 +38,8 @@ To check another device, open [`tools/engine-test.html`](https://louisrouanet-ec
 - **Text extracted for reading:** 98.5–100% identical word for word. Olson 1993 is the 98.5%: an old JSTOR scan whose text layer lost its spaces, repaired here with the dictionary.
 - **Pronunciation:** 99.0% of 16,808 words identical, 0.8% differ only in stress, and 0.2% differ in sound. These are words whose pronunciation depends on grammar, such as *live* and *use*, which the local version resolves with a part-of-speech tagger.
 
+- **Word timing:** the highlight uses the same timing rule as the local version. Checked with Whisper speech recognition on three minutes of browser-made audio, the median gap between highlight and voice is 0.02 seconds (mean 0.06), the same as the local version.
+
 The browser version also differs in a few other ways:
 - **Original pages:** they are drawn sharply at any zoom.
 - **Playback:** reading starts before the whole text is voiced.
