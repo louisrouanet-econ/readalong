@@ -82,6 +82,12 @@ select { font-family: var(--mono); font-size: 13px; }
 .intake-lede { font: italic 400 30px/1.25 var(--serif); margin: 0 0 18px; max-width: 26ch; }
 .intake-row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
 .intake-row .fine { max-width: 52ch; }
+.link-row { margin-top: 14px; flex-wrap: nowrap; gap: 10px; }
+.link-row input { flex: 1; min-width: 0; font: 400 15px/1.3 var(--mono); padding: 9px 10px; color: var(--ink);
+  background: transparent; border: 1px solid var(--rule); border-radius: 0; }
+.link-row input:focus { outline: none; border-color: var(--ink); }
+.link-status { margin: 8px 0 0; min-height: 1.3em; max-width: 70ch; }
+.link-status.err { color: var(--accent); }
 .shelf { padding-top: 34px; }
 .index { list-style: none; margin: 0; padding: 0; counter-reset: item; border-top: 1px solid var(--rule); }
 .index > li { counter-increment: item; display: grid; grid-template-columns: 44px 1fr auto; gap: 4px 16px; padding: 16px 0; border-bottom: 1px solid var(--rule); align-items: baseline; }

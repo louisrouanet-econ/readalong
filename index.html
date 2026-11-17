@@ -27,12 +27,17 @@
   </header>
 
   <section class="intake" id="intake">
-    <p class="intake-lede">Drop a PDF, a Word file or a saved web page anywhere on this page.</p>
+    <p class="intake-lede">Drop a PDF, a Word file or a saved web page anywhere on this page, or paste a link.</p>
     <div class="intake-row">
       <button class="btn solid" id="pick">Choose a file</button>
       <input type="file" id="file" multiple accept=".pdf,.docx,.html,.htm,.txt,.md" hidden>
-      <span class="fine">Scanned PDFs work too. Nothing is uploaded: the text and the voice are produced on this device.</span>
+      <span class="fine">Scanned PDFs work too. Your files are not uploaded: the text and the voice are produced on this device.</span>
     </div>
+    <form class="intake-row link-row" id="linkform" autocomplete="off">
+      <input type="text" inputmode="url" spellcheck="false" id="link" placeholder="https://… a PDF, a Word file, a web page, a Google Docs or Drive link" aria-label="Link to a reading" required>
+      <button class="btn" type="submit" id="linkgo">Open link</button>
+    </form>
+    <p class="fine link-status" id="linkstatus" aria-live="polite"></p>
   </section>
 
   <section class="shelf">

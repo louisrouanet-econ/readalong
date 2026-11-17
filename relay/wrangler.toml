@@ -1,0 +1,6 @@
+# Cloudflare Worker that lets ReadAlong open links (see relay/worker.js and the README).
+# Deploy: npx wrangler login, then npx wrangler deploy (from this folder).
+name = "readalong-relay"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = true

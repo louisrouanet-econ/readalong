@@ -24,6 +24,14 @@ export function detect(bytes) {
   return "text";
 }
 
+/** Archives, images and other non-text files (they would otherwise be read as garbled text). */
+export function looksBinary(bytes) {
+  const n = Math.min(bytes.length, 4096);
+  let bad = 0;
+  for (let i = 0; i < n; i++) { const b = bytes[i]; if (b === 0 || (b < 9) || (b > 13 && b < 32)) bad++; }
+  return n > 0 && bad / n > 0.02;
+}
+
 function decodeText(bytes) {
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return new TextDecoder("windows-1252").decode(bytes); }
 }
@@ -40,5 +48,6 @@ export async function extract(bytes, { forceOcr = false, skipOcr = false, onProg
   }
   if (kind === "doc") throw new Error("Old .doc files (Word 97-2003) are not supported. In Word, use File > Save As > .docx.");
   if (kind === "html") return extractHtml(decodeText(bytes));
+  if (looksBinary(bytes)) throw new Error("This file is not a reading: ReadAlong opens PDFs, Word files (.docx), web pages and text files.");
   return extractText(decodeText(bytes));
 }

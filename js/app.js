@@ -3,6 +3,7 @@ import { ensureIsolation } from "./coi.js";
 import { loadDict } from "./g2p.js";
 import { Lexicon } from "./lexicon.js";
 import { extract, loadPdfjs } from "./ingest/index.js";
+import { fetchLink, LinkError } from "./ingest/link.js";
 import { layout, buildPlan } from "./speech.js";
 import { Engine, pickBackend, modelFor, wav, hash, SilentError } from "./engine.js";
 import { Normalizer, Token } from "./normalize.js";
@@ -114,15 +115,16 @@ async function setMeta(id, patch) {
 }
 
 async function addFiles(files) {
+  for (const f of files) await addReading(f.name, new Uint8Array(await f.arrayBuffer()));
+}
+/** Keep a reading (a dropped file, or what a link led to) in this browser and start preparing it. */
+async function addReading(name, bytes, url = null, title = "") {
   // ask the browser not to evict this site's storage (notes live only here)
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
-  for (const f of files) {
-    const id = (f.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 40) || "reading") + "_" + Math.random().toString(36).slice(2, 7);
-    const bytes = new Uint8Array(await f.arrayBuffer());
-    await db.put("files", { id, name: f.name, bytes });
-    await setMeta(id, { id, title: f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "), created: Date.now(), status: "reading", message: "Reading the file", n: 0, done: 0, durs: {} });
-    prepare(id).catch((e) => { console.error(e); setMeta(id, { status: "error", message: e.message || String(e) }); });
-  }
+  const id = (name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 40) || "reading") + "_" + Math.random().toString(36).slice(2, 7);
+  await db.put("files", url ? { id, name, bytes, url } : { id, name, bytes });
+  await setMeta(id, { id, title: title || name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "), ...(title ? { titleLocked: true } : {}), created: Date.now(), status: "reading", message: "Reading the file", n: 0, done: 0, durs: {}, ...(url ? { url } : {}) });
+  prepare(id).catch((e) => { console.error(e); setMeta(id, { status: "error", message: e.message || String(e) }); });
 }
 
 /** Extract text and build the speech plan (re-used for re-extraction and pronunciation changes). */
@@ -143,7 +145,9 @@ async function prepare(id, { reextract = false, forceOcr = false, upgrade = fals
     h.pages = ex.pages;
     h.kind = ex.kind;
     const m = await db.get("docs", id);
-    const title = ex.title && ex.title.length > 3 && !m.titleLocked ? ex.title : m.title;
+    // a PDF's own title is often a leftover file name ("Microsoft Word - draft3.docx"): keep the file name then
+    const junk = /^(microsoft (word|powerpoint)|untitled|document\d*$|slide \d)|\.(docx?|pdf|rtf|tex|indd|pptx?)$|^[\w-]+$/i.test(ex.title || "");
+    const title = ex.title && ex.title.length > 3 && !junk && !m.titleLocked ? ex.title : m.title;
     await setMeta(id, { kind: ex.kind, title, pages: ex.pages.length });
   }
   return finishPlan(id, h, lex);
@@ -340,14 +344,36 @@ async function renderSamples() {
 
 $("#pick").onclick = () => $("#file").click();
 $("#file").onchange = (e) => { addFiles([...e.target.files]); e.target.value = ""; };
+// links: the reading is downloaded once, then kept in this browser like a dropped file
+let linkBusy = false;
+$("#linkform").onsubmit = async (e) => {
+  e.preventDefault();
+  if (linkBusy) return;
+  const input = $("#link"), status = $("#linkstatus"), go = $("#linkgo");
+  const say = (msg, err = false) => { status.textContent = msg; status.classList.toggle("err", err); };
+  linkBusy = true; go.disabled = true;
+  try {
+    const got = await fetchLink(input.value, { onProgress: (m) => say(m + "…") });
+    await addReading(got.name, got.bytes, got.url, got.title);
+    input.value = ""; say("");
+  } catch (er) {
+    console.warn("ReadAlong link:", er);
+    say(er instanceof LinkError ? er.message : "That link could not be opened. Download the file in your browser, then drop it on this page.", true);
+  } finally { linkBusy = false; go.disabled = false; }
+};
 let dragDepth = 0;
-document.addEventListener("dragenter", (e) => { if ($("#library").hidden || !e.dataTransfer.types.includes("Files")) return; e.preventDefault(); dragDepth++; $("#veil").hidden = false; });
+document.addEventListener("dragenter", (e) => { if ($("#library").hidden || !["Files", "text/uri-list"].some((t) => e.dataTransfer.types.includes(t))) return; e.preventDefault(); dragDepth++; $("#veil").hidden = false; });
 document.addEventListener("dragover", (e) => { if (!$("#library").hidden) e.preventDefault(); });
 document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("#veil").hidden = true; } });
 document.addEventListener("drop", (e) => {
   if ($("#library").hidden) return;
   e.preventDefault(); dragDepth = 0; $("#veil").hidden = true;
   if (e.dataTransfer.files.length) addFiles([...e.dataTransfer.files]);
+  else {
+    // a link dragged from another tab
+    const u = (e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain") || "").split("\n").find((l) => /^https?:\/\//i.test(l.trim()));
+    if (u) { $("#link").value = u.trim(); $("#linkform").requestSubmit(); }
+  }
 });
 
 // ======================================================================= routing
@@ -1128,7 +1154,7 @@ function openHelp() {
 function openAbout() {
   dialog("About ReadAlong", `<div class="prose">
     <p>ReadAlong turns a reading into an audiobook you can follow word by word. It was made for course readings: it skips running headers, page numbers, footnote markers and citations, says numbers the way a person would, and lets you fix how names are pronounced.</p>
-    <p>Everything happens in your browser. Your files, notes and the voice never leave this device. The first time, the browser downloads the voice model (${modelFor(pickBackend(settings.engine), settings.quality).mb} MB) from Hugging Face and keeps it.</p>
+    <p>Everything happens in your browser. Your files, notes and the voice never leave this device. When you open a link, the reading is downloaded directly if the site allows it; otherwise a small relay run for ReadAlong fetches that one address and passes the file on without keeping it. The first time, the browser downloads the voice model (${modelFor(pickBackend(settings.engine), settings.quality).mb} MB) from Hugging Face and keeps it.</p>
     <p>The voice is <a href="https://huggingface.co/hexgrad/Kokoro-82M" target="_blank" rel="noopener">Kokoro-82M</a> (Apache 2.0). Pronunciation uses the misaki dictionaries (Apache 2.0) and espeak-ng (GPL 3.0) for unfamiliar words. PDFs are read with PDF.js, scans with Tesseract. See <a href="NOTICE.md" target="_blank">NOTICE.md</a> for licences, and the <a href="https://github.com/louisrouanet-econ/readalong" target="_blank" rel="noopener">source code</a>.</p></div>`);
 }
 

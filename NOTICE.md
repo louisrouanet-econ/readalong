@@ -10,6 +10,7 @@ ReadAlong's own code is released under the MIT licence (see LICENSE). It builds 
 | [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (`vendor/ort/`) | runs the voice model on the graphics card or processor | MIT |
 | [PDF.js](https://github.com/mozilla/pdf.js) (`vendor/pdfjs/`) | reads and draws PDFs | Apache 2.0 |
 | [fflate](https://github.com/101arrowz/fflate) (`vendor/fflate.mjs`) | opens Word (.docx) files | MIT |
+| [Readability](https://github.com/mozilla/readability) 0.6.0 (`vendor/readability.mjs`) | finds the article in a web page (as Firefox Reader View does) | Apache 2.0 |
 | [Tesseract.js](https://github.com/naptha/tesseract.js) | OCR for scanned pages; loaded from jsDelivr only when needed | Apache 2.0 |
 | [Newsreader](https://fonts.google.com/specimen/Newsreader), [IBM Plex Mono](https://fonts.google.com/specimen/IBM+Plex+Mono) | typefaces, from Google Fonts | SIL Open Font License 1.1 |
 

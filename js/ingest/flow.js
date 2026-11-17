@@ -113,9 +113,29 @@ const BLOCK_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "bloc
   "aside", "nav", "figure", "body"]);
 const DROP = "script,style,noscript,nav,header,footer,aside,form,svg,button,iframe,template,select,input,img,video,audio,canvas";
 
-export function extractHtml(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
+const REF_HEAD = /^(references|notes|endnotes|footnotes|bibliography|works cited|sources|citations|further reading|external links|see also|literature|notes and references)$/i;
+
+export async function extractHtml(html) {
+  let doc = new DOMParser().parseFromString(html, "text/html");
   let title = (doc.title || "").trim();
+  // reader mode (as Firefox Reader View): keep the article, drop menus, sidebars, link boxes and category lists
+  try {
+    const { default: Readability } = await import(new URL("../../vendor/readability.mjs", import.meta.url).href);
+    const src = doc.cloneNode(true);
+    // "[edit]" links beside headings are not part of the text
+    src.querySelectorAll("span,a").forEach((e) => { if (/^\[?\s*edit( source)?\s*\]?$/i.test(e.textContent.trim())) e.remove(); });
+    // Readability drops headings whose class names look like page furniture (Wikipedia's do); headings are text
+    src.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((h) => {
+      h.removeAttribute("class"); h.removeAttribute("id");
+      const p = h.parentElement;
+      if (p && p.localName === "div" && p.children.length === 1) { p.removeAttribute("class"); p.removeAttribute("id"); }
+    });
+    const art = new Readability(src, { charThreshold: 300 }).parse();
+    if (art && art.content && (art.textContent || "").trim().split(/\s+/).length >= 150) {
+      doc = new DOMParser().parseFromString(`<!doctype html><html><body><article>${art.content}</article></body></html>`, "text/html");
+      if (art.title) title = art.title.trim();
+    }
+  } catch (e) { console.warn("ReadAlong: reader mode failed, using the whole page", e); }
   doc.querySelectorAll(DROP).forEach((el) => el.remove());
   let root = doc.querySelector("article") || doc.querySelector("main") || doc.body || doc.documentElement;
   if (root.textContent.trim().length < 500 && doc.body) {
@@ -164,6 +184,14 @@ export function extractHtml(html) {
     }
   };
   if (BLOCK_TAGS.has(root.localName) && hasBlockChild(root)) walk(root); else emit(root);
+  // "References", "External links", "See also"...: not read by default (as in PDFs), until the next real heading
+  let refMode = false;
+  for (const b of blocks) {
+    if (b.type === "heading") {
+      refMode = REF_HEAD.test(b.words.map((w) => w.t).join(" ").replace(/\[edit\]$/i, "").trim());
+      if (refMode) b.type = "reference"; // the heading goes with its list
+    } else if (refMode && (b.type === "para" || b.type === "caption")) b.type = "reference";
+  }
   if (!title) { const h = blocks.find((b) => b.type === "heading"); title = h ? h.words.map((w) => w.t).join(" ") : ""; }
   return { kind: "html", title, pages: [], blocks };
 }
