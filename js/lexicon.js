@@ -12,19 +12,28 @@ export function cleanPhonemes(p) {
   return "/" + [...p].filter((c) => c in VOCAB).join("") + "/";
 }
 
-/** 'bah-stee-AH' -> '/bɑstiˈɑ/': each chunk is sounded out; the CAPITALISED chunk carries the stress. */
+/** 'bah-stee-AH' -> '/bɑstiˈɑ/': each chunk is sounded out; the CAPITALISED chunk carries the stress.
+ *  Chunks like 'tle' or 'ble' (no vowel but a final e) are read as a syllabic l, as in 'battle'. */
+const C = { b: "b", c: "k", d: "d", f: "f", g: "ɡ", k: "k", p: "p", s: "s", t: "t", v: "v", z: "z", m: "m", n: "n", sh: "ʃ", ch: "ʧ", th: "θ", ck: "k" };
+async function chunkPhonemes(c) {
+  const m = c.match(/^([^aeiouy]{1,3})(le|el|ul|al)$/);
+  if (m) {
+    const cons = m[1].replace(/(sh|ch|th|ck|.)/g, (x) => C[x] ?? "");
+    if (cons) return cons + "ᵊl";
+  }
+  return dictWord(c) || (await espeak(c)) || "";
+}
 export async function respellToPhonemes(text) {
   const chunks = text.trim().split(/[-\s·]+/).filter(Boolean);
   const hasCaps = chunks.some((c) => c === c.toUpperCase() && c !== c.toLowerCase());
   const out = [];
   for (const c of chunks) {
-    let ph = dictWord(c.toLowerCase()) || (await espeak(c.toLowerCase())) || "";
-    ph = ph.replace(/ /g, "");
+    let ph = (await chunkPhonemes(c.toLowerCase())).replace(/ /g, "");
     if (hasCaps) {
       ph = ph.replace(/[ˈˌ]/g, "");
       if (c === c.toUpperCase() && c !== c.toLowerCase()) {
-        const m = ph.search(/[AIOQWYaeiouæɑɒɔəɛɜɪʊʌᵻ]/);
-        ph = m >= 0 ? ph.slice(0, m) + "ˈ" + ph.slice(m) : "ˈ" + ph;
+        const k = ph.search(/[AIOQWYaeiouæɑɒɔəɛɜɪʊʌᵻ]/);
+        ph = k >= 0 ? ph.slice(0, k) + "ˈ" + ph.slice(k) : "ˈ" + ph;
       }
     }
     out.push(ph);
