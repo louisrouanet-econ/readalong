@@ -15,16 +15,17 @@ It was made for course readings, so the voice reads them the way a person would:
 
 There is no server. GitHub Pages only delivers the files. Your readings, notes and pronunciation fixes stay in your browser's storage on your device, and nothing you add is uploaded. Notes therefore live in that browser on that computer: use **Export** to keep a copy.
 
-- **The voice:** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), an open model. The first time, the browser downloads it from Hugging Face (163 MB) and keeps it.
+- **The voice:** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), an open model. The first time, the browser downloads it from Hugging Face and keeps it: 326 MB with a graphics card, 92 MB without.
 - **Speed:** with a graphics card (WebGPU, in current Chrome and Edge), the voice is produced faster than you listen. Playback starts within seconds while the rest of the reading is voiced in the background. Without WebGPU, the voice runs on the processor and is slower than real time, so a reading has to be voiced ahead of listening.
 
 Measured on one Windows laptop with a recent NVIDIA graphics card, in Chrome. Laptops with integrated graphics will be slower; phones much slower.
 
 | Engine | Model | Speed |
 |---|---|---|
-| Graphics card (WebGPU) | 16-bit, 163 MB (default) | about 5× real time |
 | Graphics card (WebGPU) | 32-bit, 326 MB | about 3.6× real time |
 | Processor only, 4 threads | 8-bit, 92 MB | about 0.6× real time |
+
+The 16-bit model (163 MB) is faster on the graphics card but produces silence there (its numbers overflow), so it is not used.
 
 To check another device, open [`tools/engine-test.html`](https://louisrouanet-econ.github.io/readalong/tools/engine-test.html).
 

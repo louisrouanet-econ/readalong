@@ -4,7 +4,7 @@ import { loadDict } from "./g2p.js";
 import { Lexicon } from "./lexicon.js";
 import { extract, loadPdfjs } from "./ingest/index.js";
 import { layout, buildPlan } from "./speech.js";
-import { Engine, pickBackend, modelFor, wav, hash } from "./engine.js";
+import { Engine, pickBackend, modelFor, wav, hash, SilentError } from "./engine.js";
 import { Normalizer, Token } from "./normalize.js";
 import { phonemizeTokens } from "./g2p.js";
 import { Player } from "./player.js";
@@ -56,7 +56,7 @@ const VOICES = [
 ];
 const planSig = (lex) => JSON.stringify([settings.readFootnotes, settings.readCitations, settings.readReferences,
   settings.readCaptions, settings.readHeaders, lex.version(), 3]);
-const voiceSig = () => `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts`;
+const voiceSig = () => `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts|2`;
 
 // ======================================================================= shared resources
 const dictP = loadDict(new URL("../data/dict.json", import.meta.url));
@@ -205,7 +205,16 @@ const voicer = {
         if (!job) break;
         await startEngine();
         const { id, st, ci } = job;
-        const rec = await engine.renderChunk(st.chunks[ci], settings.voice, +settings.pace);
+        let rec;
+        try {
+          rec = await engine.renderChunk(st.chunks[ci], settings.voice, +settings.pace);
+        } catch (e) {
+          if (!(e instanceof SilentError) || engine.cfg.backend !== "webgpu") throw e;
+          gpuFailed = true; // the graphics card gave silence: switch to the processor and try again
+          engine.stop();
+          toast("The graphics card produced silence; switching to the processor (slower).", 6000);
+          continue;
+        }
         if (this.state.get(id) !== st) continue; // plan changed meanwhile
         await db.put("audio", { key: st.keys[ci], ...rec });
         st.have.add(ci);
@@ -215,7 +224,7 @@ const voicer = {
           meta.durs[st.keys[ci]] = rec.dur;
           meta.done = st.have.size;
           meta.n = st.chunks.length;
-          if (meta.status !== "ready") meta.status = "voicing";
+          meta.status = "voicing"; // finish() marks it ready once every passage is voiced
           await db.put("docs", meta);
         }
         for (const f of this.listeners) f(id, ci, rec);
@@ -994,9 +1003,9 @@ async function openSettings() {
       <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${gpu ? " (graphics card)" : " (processor)"}</option>
         <option value="webgpu" ${settings.engine === "webgpu" ? "selected" : ""} ${gpu ? "" : "disabled"}>Graphics card (WebGPU)</option>
         <option value="wasm" ${settings.engine === "wasm" ? "selected" : ""}>Processor only (slower)</option></select>
-      <select id="s-quality"><option value="standard" ${settings.quality === "standard" ? "selected" : ""}>Standard model (${modelFor(pickBackend(settings.engine), "standard").mb} MB)</option>
-        <option value="best" ${settings.quality === "best" ? "selected" : ""}>Full-precision model (326 MB)</option></select></div>
-      <p class="fine">${gpu ? "This browser can use the graphics card, which is several times faster than real time on most computers." : "This browser cannot use the graphics card, so the voice runs on the processor and may be slower than real time. Recent Chrome or Edge can use the graphics card."}</p></div>
+      <select id="s-quality"><option value="standard" ${settings.quality === "standard" ? "selected" : ""}>Processor: compact model (92 MB)</option>
+        <option value="best" ${settings.quality === "best" ? "selected" : ""}>Processor: full-precision model (326 MB)</option></select></div>
+      <p class="fine">The graphics card always uses the full-precision model (326 MB). ${gpu ? "This browser can use the graphics card, which is faster than real time on most recent computers." : "This browser cannot use the graphics card, so the voice runs on the processor and may be slower than real time. Recent Chrome or Edge can use the graphics card."}</p></div>
     ${inReader ? `<div class="field"><span class="label">This reading</span><div class="row" style="flex-wrap:wrap">
       <button class="btn small quiet" id="s-ocr">Text looks garbled? Re-read with OCR</button>
       <button class="btn small quiet" id="s-reext">Re-read the file</button>

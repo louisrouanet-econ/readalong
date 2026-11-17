@@ -7,10 +7,12 @@ export function pickBackend(pref) {
   if (pref === "wasm" || !gpu) return "wasm";
   return "webgpu";
 }
+// On WebGPU only the full-precision model is safe: the 16-bit export produces NaN (silence) there.
 export function modelFor(backend, quality) {
-  if (backend === "webgpu") return quality === "best" ? { dtype: "fp32", mb: 326 } : { dtype: "fp16", mb: 163 };
+  if (backend === "webgpu") return { dtype: "fp32", mb: 326 };
   return quality === "best" ? { dtype: "fp32", mb: 326 } : { dtype: "q8", mb: 92 };
 }
+export class SilentError extends Error {}
 
 export class Engine {
   constructor() {
@@ -77,6 +79,9 @@ export class Engine {
   /** Synthesize one plan chunk; returns stored form: Int16 PCM with a leading pause + per-word times. */
   async renderChunk(chunk, voice, speed) {
     const { audio, durations } = await this.synth(chunk.ids, voice, speed);
+    let bad = 0, peak = 0;
+    for (let i = 0; i < audio.length; i += 7) { const v = audio[i]; if (!Number.isFinite(v)) bad++; else if (Math.abs(v) > peak) peak = Math.abs(v); }
+    if (bad > audio.length / 700 || peak < 0.01) throw new SilentError("The voice engine produced silence on this device.");
     const cum = new Float64Array(durations.length + 1);
     for (let i = 0; i < durations.length; i++) cum[i + 1] = cum[i] + Math.max(1, Math.round(durations[i]));
     // word timing rests on this: rounded durations x 600 samples = the audio produced
