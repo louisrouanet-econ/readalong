@@ -4,7 +4,7 @@
 import { detect, looksBinary } from "./index.js";
 
 // The relay's address. On a local copy (http://127.0.0.1:8800) the development relay is used: node tools/relay-dev.mjs
-const PUBLIC_RELAY = "https://readalong-relay.louisrouanet-econ.workers.dev/";
+const PUBLIC_RELAY = "https://readalong-relay.louisrouanetecon.workers.dev/";
 export function relayUrl() {
   try { const o = localStorage.getItem("readalong:relay"); if (o) return o; } catch { /* storage blocked */ }
   return /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? "http://127.0.0.1:8787/" : PUBLIC_RELAY;

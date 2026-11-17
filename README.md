@@ -14,7 +14,15 @@ It was made for course readings, so the voice reads them the way a person would:
 
 ## Everything runs in the browser
 
-There is no server. GitHub Pages only delivers the files. Your readings, notes and pronunciation fixes stay in your browser's storage on your device, and nothing you add is uploaded. Notes therefore live in that browser on that computer: use **Export** to keep a copy.
+GitHub Pages only delivers the files. Your readings, notes and pronunciation fixes stay in your browser's storage on your device, and files you add are not uploaded. Notes therefore live in that browser on that computer: use **Export** to keep a copy.
+
+**Links.** You can also paste (or drag in) a link to a PDF, a Word file or a web page:
+
+- **Share links work:** Google Docs, Google Drive, Dropbox and GitHub.
+- **Article pages:** journals, arXiv, NBER and repositories are replaced by the article's PDF when it is freely available.
+- **Web pages:** they are read in "reader mode", so only the article is read, not the menus or the reference list.
+- **How it is fetched:** the browser downloads the reading directly when the site allows it. Most sites don't, so a small relay (`relay/worker.js`, a Cloudflare Worker) fetches that one address and passes the file on without keeping it. It only serves this site and only passes reading formats, up to 60 MB.
+- **Links that need a login:** JSTOR, Canvas, library proxies and private Drive files can't be fetched. ReadAlong says so, and you download the file and drop it in instead.
 
 - **The voice:** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), an open model. The first time, the browser downloads it from Hugging Face and keeps it: 326 MB with a graphics card, 92 MB without.
 - **Speed:** with a graphics card (WebGPU, in current Chrome and Edge), the voice is produced faster than you listen. Playback starts within seconds while the rest of the reading is voiced in the background. Without WebGPU, the voice runs on the processor and is slower than real time, so a reading has to be voiced ahead of listening.
@@ -81,3 +89,7 @@ coi-sw.js       service worker that lets the voice use several processor threads
 ```
 
 Licences of the components are listed in [NOTICE.md](NOTICE.md).
+
+### The link relay
+
+`relay/` holds the Cloudflare Worker that fetches links for the site (free plan: 100,000 requests a day). To change it, edit `relay/worker.js`; to run it locally, `node tools/relay-dev.mjs` (the local site uses it automatically); to publish, `npx wrangler login` and then `npx wrangler deploy` from `relay/`. Its address is set in `js/ingest/link.js`, and the sites it serves are listed at the top of `relay/worker.js`.
