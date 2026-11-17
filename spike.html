@@ -1,0 +1,28 @@
+<!doctype html><meta charset="utf-8"><title>engine spike</title>
+<pre id="log"></pre>
+<script type="module">
+import { ensureIsolation } from "./js/coi.js"; await ensureIsolation();
+import { VOCAB } from "./js/vocab.js";
+const log = (s) => (document.getElementById("log").textContent += s + "\n");
+const q = new URLSearchParams(location.search);
+const backend = q.get("backend") || ("gpu" in navigator ? "webgpu" : "wasm");
+const dtype = q.get("dtype") || (backend === "webgpu" ? "fp32" : "q8");
+log(`crossOriginIsolated=${self.crossOriginIsolated} webgpu=${"gpu" in navigator} backend=${backend} dtype=${dtype}`);
+const ph = "ɪn ˌAtˈin fˈɪfti, fɹAdˈAɹɪk bˌɑstiˈɑ ɹˈOt ðæt ðə bɹˈOkən wˈɪndO kˈɔst ðə ʃˈɑpkˌipəɹ sˈɪks fɹˈæŋks. ɪt ɪz nˈɑt sˈin ðæt, æz ˈAvəɹ ʃˈɑpkˌipəɹ hæz spˈɛnt sˈɪks fɹˈæŋks ˌɑn wˈʌn θˈɪŋ, hi kˈænɑt spˈɛnd ðˈɛm ˌɑn ənˈʌðəɹ.";
+const ids = [...ph].map((c) => VOCAB[c]).filter((x) => x !== undefined);
+const w = new Worker(new URL("./js/tts.worker.js", import.meta.url), { type: "module" });
+let t0 = performance.now(), runs = 0;
+w.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === "progress") { if (m.loaded % (8 << 20) < 70000) log(`download ${(m.loaded / 1e6).toFixed(0)}/${(m.total / 1e6).toFixed(0)} MB`); }
+  else if (m.type === "ready") { log(`ready in ${(m.ms / 1000).toFixed(1)}s threads=${m.threads}`); w.postMessage({ type: "synth", id: 1, ids, voice: "af_heart", speed: 1 }); }
+  else if (m.type === "audio") {
+    const secs = m.audio.length / 24000;
+    const sum = m.durations.reduce((a, d) => a + Math.max(1, Math.round(d)), 0);
+    log(`run ${++runs}: ${secs.toFixed(2)}s audio in ${(m.ms / 1000).toFixed(2)}s -> ${(secs / (m.ms / 1000)).toFixed(1)}x realtime; durations ${m.durations.length} (ids ${ids.length + 2}); sum*600=${sum * 600} samples=${m.audio.length}`);
+    if (runs < 4) w.postMessage({ type: "synth", id: runs + 1, ids, voice: "af_heart", speed: 1 });
+    else { window.SPIKE_DONE = true; const ctx = new AudioContext({ sampleRate: 24000 }); window.playLast = () => { const b = ctx.createBuffer(1, m.audio.length, 24000); b.copyToChannel(m.audio, 0); const s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(); }; }
+  } else if (m.type === "error") log("ERROR " + m.message);
+};
+w.postMessage({ type: "init", backend, dtype });
+</script>
