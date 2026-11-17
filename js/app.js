@@ -346,7 +346,10 @@ $("#pick").onclick = () => $("#file").click();
 $("#file").onchange = (e) => { addFiles([...e.target.files]); e.target.value = ""; };
 // links: the reading is downloaded once, then kept in this browser like a dropped file
 let linkBusy = false;
-$("#linkform").onsubmit = async (e) => {
+// right after an update a browser can still hold the previous page with the new scripts: reload once instead of failing
+if (!$("#linkform")) {
+  try { if (!sessionStorage.getItem("readalong:stale-reload")) { sessionStorage.setItem("readalong:stale-reload", "1"); location.reload(); } } catch { /* storage blocked */ }
+} else $("#linkform").onsubmit = async (e) => {
   e.preventDefault();
   if (linkBusy) return;
   const input = $("#link"), status = $("#linkstatus"), go = $("#linkgo");
@@ -372,7 +375,7 @@ document.addEventListener("drop", (e) => {
   else {
     // a link dragged from another tab
     const u = (e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain") || "").split("\n").find((l) => /^https?:\/\//i.test(l.trim()));
-    if (u) { $("#link").value = u.trim(); $("#linkform").requestSubmit(); }
+    if (u && $("#linkform")) { $("#link").value = u.trim(); $("#linkform").requestSubmit(); }
   }
 });
 
