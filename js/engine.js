@@ -79,6 +79,8 @@ export class Engine {
     const { audio, durations } = await this.synth(chunk.ids, voice, speed);
     const cum = new Float64Array(durations.length + 1);
     for (let i = 0; i < durations.length; i++) cum[i + 1] = cum[i] + Math.max(1, Math.round(durations[i]));
+    // word timing rests on this: rounded durations x 600 samples = the audio produced
+    if (Math.abs(cum[durations.length] * 600 - audio.length) > 600) console.warn("ReadAlong: duration/audio mismatch", cum[durations.length] * 600, audio.length);
     // trim silence at both ends, then put the planned pause in front
     let a = 0, b = audio.length;
     const th = 0.012;

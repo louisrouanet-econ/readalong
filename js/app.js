@@ -78,15 +78,24 @@ engine.on((info) => {
   if (R.id) updateStatus();
 });
 
+let gpuFailed = false; // once the graphics card fails, stay on the processor for this session
+let gpuChecked = null;
+async function gpuUsable() {
+  if (gpuChecked === null) {
+    try { gpuChecked = !!(navigator.gpu && (await navigator.gpu.requestAdapter())); } catch { gpuChecked = false; }
+  }
+  return gpuChecked;
+}
 async function startEngine() {
-  const backend = pickBackend(settings.engine);
+  let backend = pickBackend(settings.engine);
+  if (backend === "webgpu" && (gpuFailed || !(await gpuUsable()))) backend = "wasm";
   try {
     await engine.start({ backend, quality: settings.quality });
   } catch (e) {
-    if (backend === "webgpu") {
-      toast("The graphics card could not run the voice; using the processor instead (slower).", 5000);
-      await engine.start({ backend: "wasm", quality: settings.quality });
-    } else throw e;
+    if (backend !== "webgpu") throw e;
+    gpuFailed = true;
+    toast("The graphics card could not run the voice; using the processor instead (slower).", 5000);
+    await engine.start({ backend: "wasm", quality: settings.quality });
   }
 }
 
@@ -102,6 +111,8 @@ async function setMeta(id, patch) {
 }
 
 async function addFiles(files) {
+  // ask the browser not to evict this site's storage (notes live only here)
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
   for (const f of files) {
     const id = (f.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 40) || "reading") + "_" + Math.random().toString(36).slice(2, 7);
     const bytes = new Uint8Array(await f.arrayBuffer());
@@ -130,6 +141,7 @@ async function prepare(id, { reextract = false, forceOcr = false } = {}) {
   const plan = await buildPlan(h.view, settings, lex, h.overrides || {}, () => {});
   Object.assign(h, { plan: plan.chunks, sentences: plan.sentences, names: plan.names, archaic: plan.archaic, sig: planSig(lex) });
   await db.put("files", h);
+  voicer.state.delete(id); // the queue must pick up the new plan (audio for unchanged passages is reused)
   const est = plan.chunks.reduce((a, c) => a + estDur(c), 0);
   await setMeta(id, { status: "voicing", message: "", n: plan.chunks.length, est });
   voicer.enqueue(id);
@@ -338,6 +350,11 @@ function closeReader() {
 async function openReader(id, { keepWord } = {}) {
   const same = R.id === id;
   if (!same) closeReader();
+  else { // re-opened after a re-plan: chunk numbering may have changed
+    player.stop();
+    for (const u of R.urls.values()) URL.revokeObjectURL(u);
+    R.urls.clear(); R.times.clear();
+  }
   $("#library").hidden = true;
   $("#reader").hidden = false;
   const meta = await db.get("docs", id);

@@ -13,4 +13,4 @@ ReadAlong's own code is released under the MIT licence (see LICENSE). It builds 
 | [Tesseract.js](https://github.com/naptha/tesseract.js) | OCR for scanned pages; loaded from jsDelivr only when needed | Apache 2.0 |
 | [Newsreader](https://fonts.google.com/specimen/Newsreader), [IBM Plex Mono](https://fonts.google.com/specimen/IBM+Plex+Mono) | typefaces, from Google Fonts | SIL Open Font License 1.1 |
 
-The sample texts in `samples/` (Hobbes 1651, Bastiat 1850 in a 19th-century translation) are in the public domain.
+The sample text in `samples/` (Hobbes, *Leviathan*, 1651, as printed in the 1909 Oxford edition) is in the public domain.
