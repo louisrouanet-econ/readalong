@@ -4,7 +4,9 @@ import { Normalizer, buildTokens, splitSentences, splitPunct } from "./normalize
 import { phonemizeTokens, known } from "./g2p.js";
 import { VOCAB } from "./vocab.js";
 
-const TARGET = 330; // phonemes per chunk: about 2 sentences, which keeps intonation flowing
+// phonemes per chunk: about 2 sentences, which keeps intonation flowing. The model needs memory in proportion to the
+// chunk (about 640 MB at 330 phonemes, 310 MB at 120), so phones get shorter chunks: settings.chunkTarget/chunkMax.
+const TARGET = 330;
 const HARD_MAX = 500;
 const PAUSE = { sentence: 0.32, para: 0.7, item: 0.45, before_heading: 1.0, after_heading: 0.75, other: 0.55 };
 const BULLET = /^[•▪◦●■□‣∙⁃➢►✓✔]/;
@@ -47,6 +49,7 @@ export function layout(ex) {
  */
 export async function buildPlan(view, settings, lexicon, overrides = {}, onProgress = () => {}) {
   const { words, blocks } = view;
+  const target = settings.chunkTarget || TARGET, hardMax = settings.chunkMax || HARD_MAX;
   const glueWords = words.map((w) => ({ t: w.t, glue: w.g, sup: w.sup, hy: w.hy, it: w.it }));
   const norm = new Normalizer(lexicon, { readCitations: !!settings.readCitations, capWords: Normalizer.capWords(words.map((w) => w.t)) });
   const archaic = norm.detectArchaic(words.map((w) => w.t));
@@ -80,9 +83,9 @@ export async function buildPlan(view, settings, lexicon, overrides = {}, onProgr
       const sToks = toks.slice(a, z), sPhs = phs.slice(a, z);
       const wids = sToks.flatMap((t) => t.w);
       if (wids.length) sentences.push({ w0: Math.min(...wids), w1: Math.max(...wids) + 1 });
-      for (const piece of splitLong(sToks, sPhs)) {
+      for (const piece of splitLong(sToks, sPhs, hardMax)) {
         const len = piece.phs.reduce((x, p) => x + p.length + 1, 0);
-        if (cur.length && curLen + len > TARGET) flush();
+        if (cur.length && curLen + len > target) flush();
         cur.push(piece);
         curLen += len;
       }
@@ -104,7 +107,7 @@ function pauseFor(type, prevType) {
 }
 
 /** Split one sentence into pieces of at most HARD_MAX phonemes, preferring punctuation boundaries. */
-function splitLong(toks, phs) {
+function splitLong(toks, phs, HARD_MAX) {
   const total = phs.reduce((x, p) => x + p.length + 1, 0);
   if (total <= HARD_MAX) return [{ toks, phs }];
   const out = [];

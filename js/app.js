@@ -56,7 +56,7 @@ const VOICES = [
   ["am_puck", "Puck", "male", "C+"], ["af_nova", "Nova", "", "C"], ["af_alloy", "Alloy", "", "C"],
 ];
 const planSig = (lex) => JSON.stringify([settings.readFootnotes, settings.readCitations, settings.readReferences,
-  settings.readCaptions, settings.readHeaders, !!settings.readFigures, lex.version(), 4]);
+  settings.readCaptions, settings.readHeaders, !!settings.readFigures, lex.version(), passageSize(), 4]);
 // bump when text extraction improves: readings added earlier are re-read from their file when next opened
 const EXTRACT_VERSION = 2;
 const typeName = (t) => ({ para: "part", figure: "chart or table text" }[t] || t);
@@ -87,14 +87,34 @@ engine.on((info) => {
   if (R.id) updateStatus();
 });
 
-// once the graphics card fails, stay on the processor. A phone can also kill the whole tab while loading the large
-// model onto its graphics chip (out of memory): the mark set before starting is then still there on the next visit.
-const GPU_MARK = "readalong:gpu-starting", GPU_BAD = "readalong:gpu-crashed";
-let gpuFailed = false;
+// A phone kills the whole tab when the voice runs out of memory, so nothing can be caught: marks are set while the
+// model is loaded onto the graphics chip (GPU_MARK) and while a passage is voiced (BUSY, set by the engine), and
+// removed when that ends or the page is left normally. A mark found on the next visit means the tab died:
+// - on the graphics chip: use the processor from then on;
+// - on the processor: voice shorter passages (the memory needed grows with the passage's length).
+const GPU_MARK = "readalong:gpu-starting", GPU_BAD = "readalong:gpu-crashed", BUSY = "readalong:voice-busy", SHORT = "readalong:short-passages";
+// (phones only: on a computer a mark left by a browser that was shut down mid-passage would wrongly slow it down)
+const PHONE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+let gpuFailed = false, shortenedAfterCrash = false;
 try {
-  if (localStorage.getItem(GPU_MARK)) { localStorage.removeItem(GPU_MARK); localStorage.setItem(GPU_BAD, "1"); }
+  const busy = PHONE ? localStorage.getItem(BUSY) : null;
+  if ((PHONE && localStorage.getItem(GPU_MARK)) || busy === "webgpu") localStorage.setItem(GPU_BAD, "1");
+  if (busy === "wasm") { localStorage.setItem(SHORT, String(Math.min(2, +(localStorage.getItem(SHORT) || 0) + 1))); shortenedAfterCrash = true; }
+  localStorage.removeItem(GPU_MARK); localStorage.removeItem(BUSY);
   gpuFailed = !!localStorage.getItem(GPU_BAD);
 } catch { /* storage blocked */ }
+const clearMarks = () => { try { localStorage.removeItem(GPU_MARK); localStorage.removeItem(BUSY); } catch { /* storage blocked */ } };
+addEventListener("pagehide", clearMarks);
+document.addEventListener("visibilitychange", () => { if (document.hidden) clearMarks(); });
+if (shortenedAfterCrash) setTimeout(() => toast("Last time, the voice ran out of memory on this device, so it now voices shorter passages.", 7000), 1500);
+
+// Phones and tablets voice short passages from the start (about one sentence): 110 phonemes need about 310 MB, where
+// the 330 used on computers need about 640 MB, more than Safari allows a tab on an iPhone.
+function passageSize() {
+  let level = PHONE ? 1 : 0;
+  try { level += +(localStorage.getItem(SHORT) || 0); } catch { /* storage blocked */ }
+  return [null, { chunkTarget: 110, chunkMax: 150 }, { chunkTarget: 60, chunkMax: 90 }][Math.min(2, level)];
+}
 let gpuChecked = null, gpuToldCrash = false;
 async function gpuUsable() {
   if (gpuChecked === null) {
@@ -181,7 +201,7 @@ function keepOcrPages(ex, oldView, pages) {
 }
 async function finishPlan(id, h, lex) {
   await setMeta(id, { status: "reading", message: "Working out what to say" });
-  const plan = await buildPlan(h.view, settings, lex, h.overrides || {}, () => {});
+  const plan = await buildPlan(h.view, { ...settings, ...passageSize() }, lex, h.overrides || {}, () => {});
   Object.assign(h, { plan: plan.chunks, sentences: plan.sentences, names: plan.names, archaic: plan.archaic, sig: planSig(lex) });
   await db.put("files", h);
   voicer.state.delete(id); // the queue must pick up the new plan (audio for unchanged passages is reused)

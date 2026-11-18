@@ -67,11 +67,18 @@ export class Engine {
   async synth(ids, voice, speed = 1) {
     await this.readyP;
     const id = ++this.seq;
+    // if the tab dies while this runs (out of memory on a phone), the app finds this mark on the next visit
+    try { localStorage.setItem("readalong:voice-busy", this.cfg.backend); } catch { /* storage blocked */ }
     const t0 = performance.now();
-    const m = await new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.worker.postMessage({ type: "synth", id, ids, voice, speed });
-    });
+    let m;
+    try {
+      m = await new Promise((resolve, reject) => {
+        this.pending.set(id, { resolve, reject });
+        this.worker.postMessage({ type: "synth", id, ids, voice, speed });
+      });
+    } finally {
+      try { localStorage.removeItem("readalong:voice-busy"); } catch { /* storage blocked */ }
+    }
     const secs = m.audio.length / SR;
     const rt = secs / ((performance.now() - t0) / 1000);
     this.speed = this.speed == null ? rt : this.speed * 0.8 + rt * 0.2;
