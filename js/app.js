@@ -5,7 +5,7 @@ import { Lexicon } from "./lexicon.js";
 import { extract, loadPdfjs } from "./ingest/index.js";
 import { fetchLink, LinkError } from "./ingest/link.js";
 import { layout, buildPlan } from "./speech.js";
-import { Engine, pickBackend, modelFor, wav, hash, SilentError } from "./engine.js";
+import { Engine, pickBackend, modelFor, wav, hash, SilentError, BUSY_MARK } from "./engine.js";
 import { Normalizer, Token } from "./normalize.js";
 import { phonemizeTokens } from "./g2p.js";
 import { Player, unlockOnTap } from "./player.js";
@@ -80,33 +80,42 @@ engine.on((info) => {
       (engine.speed ? `, ${engine.speed.toFixed(1)}× real time` : "");
   } else if (info.state === "error") line = `Voice: could not start (${info.message})`;
   $("#engine-line").textContent = line;
-  try {
-    if (info.state === "building" && info.backend === "webgpu") localStorage.setItem(GPU_MARK, "1");
-    else if (info.spoken || info.state === "error" || info.state === "off") localStorage.removeItem(GPU_MARK);
-  } catch { /* storage blocked */ }
   if (R.id) updateStatus();
 });
 
-// A phone kills the whole tab when the voice runs out of memory, so nothing can be caught: marks are set while the
-// model is loaded onto the graphics chip (GPU_MARK) and while a passage is voiced (BUSY, set by the engine), and
-// removed when that ends or the page is left normally. A mark found on the next visit means the tab died:
-// - on the graphics chip: use the processor from then on;
-// - on the processor: voice shorter passages (the memory needed grows with the passage's length).
-const GPU_MARK = "readalong:gpu-starting", GPU_BAD = "readalong:gpu-crashed", BUSY = "readalong:voice-busy", SHORT = "readalong:short-passages";
-// (phones only: on a computer a mark left by a browser that was shut down mid-passage would wrongly slow it down)
-const PHONE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
-let gpuFailed = false, shortenedAfterCrash = false;
+// A phone kills the whole tab when the voice runs out of memory, so nothing can be caught. The engine keeps a mark
+// saying what it is doing while the model loads and while a passage is voiced (engine.js); it is cleared when that
+// ends or the page is left normally. A mark found on the next visit means the tab died there. Then:
+// - the step is shown on the page (so a screenshot tells what failed) and the voice waits for the Play button
+//   instead of starting by itself, which would crash the tab again and again;
+// - on the graphics chip: the processor is used from then on;
+// - while voicing on the processor: passages get shorter (the memory needed grows with the passage's length).
+// Phones only: on a computer, a mark left by a browser shut down mid-passage would wrongly slow it down.
+const PHONE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)) ||
+  (() => { try { return localStorage.getItem("readalong:phone") === "1"; } catch { return false; } })(); // to test phone behaviour on a computer
+const GPU_BAD = "readalong:gpu-crashed", SHORT = "readalong:short-passages";
+let gpuFailed = false, voiceHeld = false;
 try {
-  const busy = PHONE ? localStorage.getItem(BUSY) : null;
-  if ((PHONE && localStorage.getItem(GPU_MARK)) || busy === "webgpu") localStorage.setItem(GPU_BAD, "1");
-  if (busy === "wasm") { localStorage.setItem(SHORT, String(Math.min(2, +(localStorage.getItem(SHORT) || 0) + 1))); shortenedAfterCrash = true; }
-  localStorage.removeItem(GPU_MARK); localStorage.removeItem(BUSY);
+  const raw = localStorage.getItem(BUSY_MARK);
+  engine.unmark();
+  localStorage.removeItem("readalong:gpu-starting"); // mark used by an earlier version
+  if (PHONE && raw) {
+    let crash; try { crash = JSON.parse(raw); } catch { crash = { backend: raw, step: "voicing a passage" }; }
+    const voicing = /^voicing/.test(crash.step || "");
+    if (crash.backend === "webgpu") localStorage.setItem(GPU_BAD, "1");
+    else if (voicing) localStorage.setItem(SHORT, String(Math.min(2, +(localStorage.getItem(SHORT) || 0) + 1)));
+    voiceHeld = true;
+    const where = crash.backend === "webgpu" ? "graphics chip" : "processor";
+    setTimeout(() => window.readalongReport && window.readalongReport(
+      `The page crashed last time (out of memory) while ${crash.step || "voicing"} (${where}). ` +
+      (crash.backend === "webgpu" ? "The voice now uses the processor. " : voicing ? "Passages are now shorter. " : "") +
+      "The voice will start when you press Play."), 800);
+  }
   gpuFailed = !!localStorage.getItem(GPU_BAD);
 } catch { /* storage blocked */ }
-const clearMarks = () => { try { localStorage.removeItem(GPU_MARK); localStorage.removeItem(BUSY); } catch { /* storage blocked */ } };
-addEventListener("pagehide", clearMarks);
-document.addEventListener("visibilitychange", () => { if (document.hidden) clearMarks(); });
-if (shortenedAfterCrash) setTimeout(() => toast("Last time, the voice ran out of memory on this device, so it now voices shorter passages.", 7000), 1500);
+const clearMark = () => engine.unmark();
+addEventListener("pagehide", clearMark);
+document.addEventListener("visibilitychange", () => { if (document.hidden) clearMark(); });
 
 // Phones and tablets voice short passages from the start (about one sentence): 110 phonemes need about 310 MB, where
 // the 330 used on computers need about 640 MB, more than Safari allows a tab on an iPhone.
@@ -124,6 +133,9 @@ async function gpuUsable() {
 }
 async function startEngine() {
   let backend = pickBackend(settings.engine);
+  // a phone's graphics chip ran out of memory with the full-precision model (iPhone, 2026): phones use the processor
+  // unless the graphics card is chosen in Settings
+  if (PHONE && settings.engine === "auto") backend = "wasm";
   if (backend === "webgpu" && gpuFailed && !gpuToldCrash) {
     gpuToldCrash = true;
     try { if (localStorage.getItem(GPU_BAD)) toast("Last time, this device's graphics chip ran out of memory with the voice, so the processor is used instead (slower).", 7000); } catch { /* storage blocked */ }
@@ -248,7 +260,7 @@ const voicer = {
     return -1;
   },
   async run() {
-    if (this.running) return;
+    if (this.running || voiceHeld) return; // after a crash, wait for Play (see voiceHeld)
     this.running = true;
     try {
       for (;;) {
@@ -853,6 +865,7 @@ $("#docview").addEventListener("click", (e) => {
 // player controls
 $("#play").onclick = () => { if (R.curWord < 0 && !player.want) seekToWord(0, true); else player.toggle(); };
 player.addEventListener("ended", () => toast("End of the reading."));
+player.addEventListener("state", () => { if (player.want && voiceHeld) { voiceHeld = false; voicer.run(); } });
 const SPEEDS = [0.75, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2];
 function setSpeedLabel() { $("#speed").textContent = (+store.get("speed", 1)).toFixed(2).replace(/0$/, "") + "×"; }
 function stepSpeed(d) {
@@ -1092,7 +1105,7 @@ async function openSettings() {
         ["readHeaders", "Running headers and page numbers"]]
         .map(([k, l]) => `<label class="check"><input type="checkbox" data-k="${k}" ${settings[k] ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
     <div class="field"><span class="label">Voice engine</span>
-      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${gpu && !gpuFailed ? " (graphics card)" : " (processor)"}</option>
+      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${gpu && !gpuFailed && !PHONE ? " (graphics card)" : " (processor)"}</option>
         <option value="webgpu" ${settings.engine === "webgpu" ? "selected" : ""} ${gpu ? "" : "disabled"}>Graphics card (WebGPU)</option>
         <option value="wasm" ${settings.engine === "wasm" ? "selected" : ""}>Processor only (slower)</option></select>
       <select id="s-quality"><option value="standard" ${settings.quality === "standard" ? "selected" : ""}>Processor: compact model (92 MB)</option>

@@ -13,6 +13,7 @@ export function modelFor(backend, quality) {
   return quality === "best" ? { dtype: "fp32", mb: 326 } : { dtype: "q8", mb: 92 };
 }
 export class SilentError extends Error {}
+export const BUSY_MARK = "readalong:voice-busy";
 
 export class Engine {
   constructor() {
@@ -25,7 +26,18 @@ export class Engine {
     this.speed = null; // measured realtime factor
   }
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
-  emit(info) { this.info = { ...this.info, ...info }; for (const f of this.listeners) f(this.info); }
+  emit(info) {
+    this.info = { ...this.info, ...info };
+    const where = this.info.backend === "webgpu" ? "graphics chip" : "processor";
+    if (info.state === "loading" && !info.loaded) this.mark("opening the voice model");
+    else if (info.state === "building") this.mark("loading the voice model onto the " + where);
+    else if (info.state === "ready" || info.state === "error" || info.state === "off") this.unmark();
+    for (const f of this.listeners) f(this.info);
+  }
+  // A phone kills the tab when the voice runs out of memory, with no error to catch. While the model loads and while
+  // a passage is voiced, a mark says what is happening; the app finds it on the next visit if the tab died (app.js).
+  mark(step) { try { localStorage.setItem(BUSY_MARK, JSON.stringify({ backend: this.cfg && this.cfg.backend, step })); } catch { /* storage blocked */ } }
+  unmark() { try { localStorage.removeItem(BUSY_MARK); } catch { /* storage blocked */ } }
 
   start({ backend, quality }) {
     if (this.readyP && this.cfg && this.cfg.backend === backend && this.cfg.quality === quality) return this.readyP;
@@ -67,8 +79,7 @@ export class Engine {
   async synth(ids, voice, speed = 1) {
     await this.readyP;
     const id = ++this.seq;
-    // if the tab dies while this runs (out of memory on a phone), the app finds this mark on the next visit
-    try { localStorage.setItem("readalong:voice-busy", this.cfg.backend); } catch { /* storage blocked */ }
+    this.mark(`voicing a passage of ${ids.length} phonemes`);
     const t0 = performance.now();
     let m;
     try {
@@ -77,7 +88,7 @@ export class Engine {
         this.worker.postMessage({ type: "synth", id, ids, voice, speed });
       });
     } finally {
-      try { localStorage.removeItem("readalong:voice-busy"); } catch { /* storage blocked */ }
+      this.unmark();
     }
     const secs = m.audio.length / SR;
     const rt = secs / ((performance.now() - t0) / 1000);
