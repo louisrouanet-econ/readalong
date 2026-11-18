@@ -74,16 +74,28 @@ engine.on((info) => {
   if (info.state === "loading") {
     const pct = info.total ? Math.round((100 * info.loaded) / info.total) : 0;
     line = `Voice: downloading the voice model, ${pct}% of ${info.mb} MB (only the first time)`;
-  } else if (info.state === "ready") {
+  } else if (info.state === "building") line = "Voice: preparing the voice model";
+  else if (info.state === "ready") {
     line = `Voice: ready (${info.backend === "webgpu" ? "graphics card" : "processor"}, ${info.dtype})` +
       (engine.speed ? `, ${engine.speed.toFixed(1)}× real time` : "");
   } else if (info.state === "error") line = `Voice: could not start (${info.message})`;
   $("#engine-line").textContent = line;
+  try {
+    if (info.state === "building" && info.backend === "webgpu") localStorage.setItem(GPU_MARK, "1");
+    else if (info.spoken || info.state === "error" || info.state === "off") localStorage.removeItem(GPU_MARK);
+  } catch { /* storage blocked */ }
   if (R.id) updateStatus();
 });
 
-let gpuFailed = false; // once the graphics card fails, stay on the processor for this session
-let gpuChecked = null;
+// once the graphics card fails, stay on the processor. A phone can also kill the whole tab while loading the large
+// model onto its graphics chip (out of memory): the mark set before starting is then still there on the next visit.
+const GPU_MARK = "readalong:gpu-starting", GPU_BAD = "readalong:gpu-crashed";
+let gpuFailed = false;
+try {
+  if (localStorage.getItem(GPU_MARK)) { localStorage.removeItem(GPU_MARK); localStorage.setItem(GPU_BAD, "1"); }
+  gpuFailed = !!localStorage.getItem(GPU_BAD);
+} catch { /* storage blocked */ }
+let gpuChecked = null, gpuToldCrash = false;
 async function gpuUsable() {
   if (gpuChecked === null) {
     try { gpuChecked = !!(navigator.gpu && (await navigator.gpu.requestAdapter())); } catch { gpuChecked = false; }
@@ -92,6 +104,10 @@ async function gpuUsable() {
 }
 async function startEngine() {
   let backend = pickBackend(settings.engine);
+  if (backend === "webgpu" && gpuFailed && !gpuToldCrash) {
+    gpuToldCrash = true;
+    try { if (localStorage.getItem(GPU_BAD)) toast("Last time, this device's graphics chip ran out of memory with the voice, so the processor is used instead (slower).", 7000); } catch { /* storage blocked */ }
+  }
   if (backend === "webgpu" && (gpuFailed || !(await gpuUsable()))) backend = "wasm";
   try {
     await engine.start({ backend, quality: settings.quality });
@@ -1054,7 +1070,7 @@ async function openSettings() {
         ["readHeaders", "Running headers and page numbers"]]
         .map(([k, l]) => `<label class="check"><input type="checkbox" data-k="${k}" ${settings[k] ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
     <div class="field"><span class="label">Voice engine</span>
-      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${gpu ? " (graphics card)" : " (processor)"}</option>
+      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${gpu && !gpuFailed ? " (graphics card)" : " (processor)"}</option>
         <option value="webgpu" ${settings.engine === "webgpu" ? "selected" : ""} ${gpu ? "" : "disabled"}>Graphics card (WebGPU)</option>
         <option value="wasm" ${settings.engine === "wasm" ? "selected" : ""}>Processor only (slower)</option></select>
       <select id="s-quality"><option value="standard" ${settings.quality === "standard" ? "selected" : ""}>Processor: compact model (92 MB)</option>
@@ -1087,6 +1103,7 @@ async function openSettings() {
     const eng = $("#s-engine", d).value, q = $("#s-quality", d).value;
     const engineChanged = eng !== settings.engine || q !== settings.quality;
     settings.engine = eng; settings.quality = q;
+    if (eng === "webgpu") { gpuFailed = false; try { localStorage.removeItem(GPU_BAD); } catch { /* storage blocked */ } }
     saveSettings();
     closeDialog();
     if (engineChanged) engine.stop();

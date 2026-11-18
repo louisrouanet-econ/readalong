@@ -32,14 +32,16 @@ export class Engine {
     this.stop();
     this.cfg = { backend, quality };
     const { dtype, mb } = modelFor(backend, quality);
-    this.emit({ state: "loading", backend, dtype, mb, loaded: 0, total: mb * 1e6 });
+    this.emit({ state: "loading", backend, dtype, mb, loaded: 0, total: mb * 1e6, spoken: false });
     this.worker = new Worker(new URL("./tts.worker.js", import.meta.url), { type: "module" });
     this.readyP = new Promise((resolve, reject) => {
       this.worker.onmessage = (e) => {
         const m = e.data;
-        if (m.type === "progress") this.emit({ state: "loading", loaded: m.loaded, total: m.total || mb * 1e6 });
+        if (m.type === "building") this.emit({ state: "building" });
+        else if (m.type === "progress") this.emit({ state: "loading", loaded: m.loaded, total: m.total || mb * 1e6 });
         else if (m.type === "ready") { this.emit({ state: "ready", backend: m.backend, dtype: m.dtype, threads: m.threads }); resolve(); }
         else if (m.type === "audio" || m.type === "voiceReady") {
+          if (m.type === "audio" && !this.info.spoken) this.emit({ spoken: true });
           const p = this.pending.get(m.id ?? m.name);
           if (p) { this.pending.delete(m.id ?? m.name); p.resolve(m); }
         } else if (m.type === "error") {

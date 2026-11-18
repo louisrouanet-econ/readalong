@@ -47,6 +47,7 @@ async function init({ backend, dtype }) {
   const t0 = performance.now();
   const url = REPO + FILES[dtype];
   const bytes = await cachedFetch(url, (loaded, total) => self.postMessage({ type: "progress", loaded, total }));
+  self.postMessage({ type: "building" }); // downloaded: now the model is loaded onto the graphics chip or processor
   const opts = { executionProviders: backend === "webgpu" ? ["webgpu"] : ["wasm"], graphOptimizationLevel: "all" };
   session = await ort.InferenceSession.create(bytes, opts);
   self.postMessage({ type: "ready", backend, dtype, ms: performance.now() - t0, threads: ort.env.wasm.numThreads });
