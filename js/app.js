@@ -9,6 +9,7 @@ import { Engine, pickBackend, modelFor, wav, hash, SilentError, BUSY_MARK } from
 import { Normalizer, Token } from "./normalize.js";
 import { phonemizeTokens } from "./g2p.js";
 import { Player, unlockOnTap } from "./player.js";
+import { DeviceVoicePlayer, deviceVoiceAvailable } from "./devicevoice.js";
 import { db } from "./db.js";
 import { VOCAB } from "./vocab.js";
 
@@ -94,6 +95,9 @@ engine.on((info) => {
 const PHONE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)) ||
   (() => { try { return localStorage.getItem("readalong:phone") === "1"; } catch { return false; } })(); // to test phone behaviour on a computer
 const GPU_BAD = "readalong:gpu-crashed", SHORT = "readalong:short-passages";
+// Phones read with the device's own voice by default: the ReadAlong voice (Kokoro) needs more memory than Safari gives
+// a tab on an iPhone, even for one short sentence (iPhone, November 2026). It can still be chosen in Settings.
+const DEVICE_VOICE = PHONE && (settings.engine === "auto" || settings.engine === "device") && deviceVoiceAvailable();
 let gpuFailed = false, voiceHeld = false;
 try {
   const raw = localStorage.getItem(BUSY_MARK);
@@ -120,6 +124,7 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) clear
 // Phones and tablets voice short passages from the start (about one sentence): 110 phonemes need about 310 MB, where
 // the 330 used on computers need about 640 MB, more than Safari allows a tab on an iPhone.
 function passageSize() {
+  if (DEVICE_VOICE) return { deviceText: 1 };
   let level = PHONE ? 1 : 0;
   try { level += +(localStorage.getItem(SHORT) || 0); } catch { /* storage blocked */ }
   return [null, { chunkTarget: 110, chunkMax: 150 }, { chunkTarget: 60, chunkMax: 90 }][Math.min(2, level)];
@@ -260,7 +265,7 @@ const voicer = {
     return -1;
   },
   async run() {
-    if (this.running || voiceHeld) return; // after a crash, wait for Play (see voiceHeld)
+    if (this.running || voiceHeld || DEVICE_VOICE) return; // after a crash, wait for Play (see voiceHeld); the device voice needs no voicing ahead
     this.running = true;
     try {
       for (;;) {
@@ -337,6 +342,7 @@ async function renderLibrary() {
   const nNotes = Object.fromEntries(notes.map((n) => [n.id, n.notes.length]));
   $("#empty").hidden = docs.length > 0;
   $("#index").innerHTML = docs.map((d) => {
+    if (DEVICE_VOICE && d.status === "voicing") d = { ...d, status: "ready", duration: d.est };
     const meta = [];
     if (d.kind) meta.push(KIND[d.kind] || d.kind);
     if (d.pages) meta.push(`${d.pages} pp.`);
@@ -436,7 +442,7 @@ async function route() {
 }
 
 // ======================================================================= reader state
-const player = new Player();
+const player = DEVICE_VOICE ? new DeviceVoicePlayer() : new Player();
 const R = {
   id: null, meta: null, h: null, view: null, mode: "page", curWord: -1, curSent: -1, wordChunk: null, wordSent: null,
   times: new Map(), urls: new Map(), notes: [], follow: store.get("follow", true), followPauseUntil: 0, raf: 0,
@@ -497,6 +503,11 @@ async function openReader(id, { keepWord } = {}) {
   player.setup(h.plan.length, h.plan.map(estDur), (ci) => chunkUrl(ci));
   st.keys.forEach((k, ci) => { const d = (meta.durs || {})[k]; if (d && st.have.has(ci)) player.setDuration(ci, d); });
   player.setRate(store.get("speed", 1));
+  if (DEVICE_VOICE) { // estimated word times for every passage, used for the highlight as voiced times are
+    const est = h.plan.map(estDur);
+    player.usePlan(h.plan, est);
+    player.recs.forEach((rec, ci) => R.times.set(ci, rec));
+  }
   const notesRec = await db.get("notes", id);
   R.notes = reanchor(notesRec ? notesRec.notes : [], h.view.words);
   const hasPages = h.pages && h.pages.length > 0 && h.kind === "pdf";
@@ -548,6 +559,7 @@ function updateStatus() {
   if (!R.id) return;
   const st = voicer.state.get(R.id);
   const el = $("#r-status");
+  if (DEVICE_VOICE) { el.textContent = ""; $("#voiced").style.width = "100%"; $("#t-dur").textContent = "~" + fmt(player.duration); return; }
   if (!st) { el.textContent = ""; return; }
   const n = st.chunks.length, done = st.have.size;
   if (engine.info.state === "loading") {
@@ -1071,6 +1083,10 @@ function closeDialog() { $("#modal-root").innerHTML = ""; }
 const previewEl = new Audio();
 unlockOnTap([previewEl]);
 async function speakPreview(text, word, value, voice) {
+  if (DEVICE_VOICE) { // the device voice cannot take phonemes: it says the text as written
+    try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.voice = player.voice; u.lang = player.voice ? player.voice.lang : "en-US"; speechSynthesis.speak(u); } catch { /* no speech */ }
+    return;
+  }
   await dictP; const lex = await lexP;
   await startEngine();
   const lx = {
@@ -1105,9 +1121,9 @@ async function openSettings() {
         ["readHeaders", "Running headers and page numbers"]]
         .map(([k, l]) => `<label class="check"><input type="checkbox" data-k="${k}" ${settings[k] ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
     <div class="field"><span class="label">Voice engine</span>
-      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${gpu && !gpuFailed && !PHONE ? " (graphics card)" : " (processor)"}</option>
+      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${PHONE && deviceVoiceAvailable() ? " (this phone's own voice)" : gpu && !gpuFailed ? " (graphics card)" : " (processor)"}</option>
         <option value="webgpu" ${settings.engine === "webgpu" ? "selected" : ""} ${gpu ? "" : "disabled"}>Graphics card (WebGPU)</option>
-        <option value="wasm" ${settings.engine === "wasm" ? "selected" : ""}>Processor only (slower)</option></select>
+        <option value="wasm" ${settings.engine === "wasm" ? "selected" : ""}>Processor only (slower)${PHONE ? ", may crash on phones" : ""}</option></select>
       <select id="s-quality"><option value="standard" ${settings.quality === "standard" ? "selected" : ""}>Processor: compact model (92 MB)</option>
         <option value="best" ${settings.quality === "best" ? "selected" : ""}>Processor: full-precision model (326 MB)</option></select></div>
       <p class="fine">The graphics card always uses the full-precision model (326 MB). ${gpu ? "This browser can use the graphics card, which is faster than real time on most recent computers." : "This browser cannot use the graphics card, so the voice runs on the processor and may be slower than real time. Recent Chrome or Edge can use the graphics card."}</p></div>
@@ -1142,6 +1158,7 @@ async function openSettings() {
     saveSettings();
     closeDialog();
     if (engineChanged) engine.stop();
+    if (engineChanged && PHONE) { location.reload(); return; } // switching between the phone's voice and ReadAlong's
     if (JSON.stringify(settings) !== before) {
       voicer.state.clear();
       for (const m of await db.all("docs")) if (m.status === "ready" || m.status === "voicing") { m.status = "voicing"; await db.put("docs", m); }

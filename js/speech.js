@@ -130,6 +130,9 @@ function splitLong(toks, phs, HARD_MAX) {
 function makeChunk(pieces, blk, pause) {
   const ids = [], spans = [];
   let text = "";
+  // for a device's built-in voice (phones): the plain spoken text, and where each span's words start in it
+  let say = "";
+  const cs = [];
   for (const { toks, phs } of pieces) {
     toks.forEach((t, k) => {
       const p = phs[k];
@@ -138,11 +141,13 @@ function makeChunk(pieces, blk, pause) {
       const a = ids.length;
       for (const c of p) { const id = VOCAB[c]; if (id !== undefined) ids.push(id); }
       text += p;
-      if (t.w.length) spans.push([t.w, a, ids.length]);
+      if (say) say += " ";
+      if (t.w.length) { spans.push([t.w, a, ids.length]); cs.push(say.length); }
+      say += t.plain || t.text;
     });
   }
   if (ids.length > 510) ids.length = 510; // never exceed the model's context
-  return { blk, pause, ids, spans, sig: text };
+  return { blk, pause, ids, spans, sig: text, say, cs };
 }
 
 function collectNames(toks, map, lexicon) {
