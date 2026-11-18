@@ -170,7 +170,16 @@ export function mapEspeak(ps) {
 
 let espeakQueue = Promise.resolve();
 export async function espeak(word) {
-  if (!espeakMod) espeakMod = await import(new URL("../vendor/phonemizer.js", import.meta.url).href);
+  if (!espeakMod) {
+    // the espeak bundle reads its data with `for await (chunk of stream)`, which Safari does not support
+    if (typeof ReadableStream !== "undefined" && !ReadableStream.prototype[Symbol.asyncIterator]) {
+      ReadableStream.prototype[Symbol.asyncIterator] = async function* () {
+        const reader = this.getReader();
+        try { for (;;) { const { done, value } = await reader.read(); if (done) return; yield value; } } finally { reader.releaseLock(); }
+      };
+    }
+    espeakMod = await import(new URL("../vendor/phonemizer.js", import.meta.url).href);
+  }
   // espeak keeps global state; serialise calls
   const run = espeakQueue.then(() => espeakMod.phonemize(word, "en-us"));
   espeakQueue = run.catch(() => {});
