@@ -5,6 +5,7 @@ ReadAlong's own code is released under the MIT licence (see LICENSE). It builds 
 | Component | Use | Licence |
 |---|---|---|
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad, ONNX export by [onnx-community](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX-timestamped) | the voice; downloaded by the browser from Hugging Face, not stored in this repository | Apache 2.0 |
+| [mesm-tts](https://huggingface.co/mesmertech/mesm-tts) by mesmer.tools: the Heart voice (`vendor/pdn/v2f.pdn`, distilled from Kokoro-82M's af_heart, from Paradee-8M v1.1 by Sahil Mahendrakar) and its pdn engine (`vendor/pdn/`) | the voice on phones, where Kokoro needs more memory than the browser allows; see `vendor/pdn/NOTICE` | Apache 2.0 |
 | [misaki](https://github.com/hexgrad/misaki) by hexgrad | pronunciation dictionaries (`data/dict.json`) and rules ported to `js/g2p.js` | Apache 2.0 |
 | [espeak-ng](https://github.com/espeak-ng/espeak-ng) via [phonemizer.js](https://github.com/xenova/phonemizer.js) (`vendor/phonemizer.js`) | pronunciation of words not in the dictionary | espeak-ng: GPL 3.0; phonemizer.js wrapper: Apache 2.0 |
 | [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (`vendor/ort/`) | runs the voice model on the graphics card or processor | MIT |

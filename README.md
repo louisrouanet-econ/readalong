@@ -25,6 +25,7 @@ GitHub Pages only delivers the files. Your readings, notes and pronunciation fix
 - **Links that need a login:** JSTOR, Canvas, library proxies and private Drive files can't be fetched. ReadAlong says so, and you download the file and drop it in instead.
 
 - **The voice:** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), an open model. The first time, the browser downloads it from Hugging Face and keeps it: 326 MB with a graphics card, 92 MB without.
+- **On phones:** Kokoro needs more memory than Safari gives a page on an iPhone, so phones use Heart from [mesm-tts](https://huggingface.co/mesmertech/mesm-tts). It is a 3.5 MB copy of the same voice with its own small engine. It voices about 30 times faster than real time on one laptop core and needs under 100 MB. It does not report when each word is said, so the highlight is estimated from the audio: half the words within 0.05–0.08 s, nine in ten within 0.15–0.3 s of where Kokoro would put them. The phone's own voice can be chosen instead in Settings.
 - **Speed:** with a graphics card (WebGPU, in current Chrome and Edge), the voice is produced faster than you listen. Playback starts within seconds while the rest of the reading is voiced in the background. Without WebGPU, the voice runs on the processor and is slower than real time, so a reading has to be voiced ahead of listening.
 
 Measured on one Windows laptop with a recent NVIDIA graphics card, in Chrome. Laptops with integrated graphics will be slower; phones much slower.

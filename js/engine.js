@@ -9,6 +9,7 @@ export function pickBackend(pref) {
 }
 // On WebGPU only the full-precision model is safe: the 16-bit export produces NaN (silence) there.
 export function modelFor(backend, quality) {
+  if (backend === "heart") return { dtype: "heart", mb: 3.5 }; // phones: heart.worker.js
   if (backend === "webgpu") return { dtype: "fp32", mb: 326 };
   return quality === "best" ? { dtype: "fp32", mb: 326 } : { dtype: "q8", mb: 92 };
 }
@@ -45,7 +46,8 @@ export class Engine {
     this.cfg = { backend, quality };
     const { dtype, mb } = modelFor(backend, quality);
     this.emit({ state: "loading", backend, dtype, mb, loaded: 0, total: mb * 1e6, spoken: false });
-    this.worker = new Worker(new URL("./tts.worker.js", import.meta.url), { type: "module" });
+    this.worker = backend === "heart" ? new Worker(new URL("./heart.worker.js", import.meta.url), { type: "module" })
+      : new Worker(new URL("./tts.worker.js", import.meta.url), { type: "module" });
     this.readyP = new Promise((resolve, reject) => {
       this.worker.onmessage = (e) => {
         const m = e.data;

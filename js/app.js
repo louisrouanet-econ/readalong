@@ -61,7 +61,7 @@ const planSig = (lex) => JSON.stringify([settings.readFootnotes, settings.readCi
 // bump when text extraction improves: readings added earlier are re-read from their file when next opened
 const EXTRACT_VERSION = 2;
 const typeName = (t) => ({ para: "part", figure: "chart or table text" }[t] || t);
-const voiceSig = () => `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts|3`;
+const voiceSig = () => HEART ? `heart|${(+settings.pace).toFixed(2)}|mesm-v2f|1` : `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts|3`;
 
 // ======================================================================= shared resources
 const dictP = loadDict(new URL("../data/dict.json", import.meta.url));
@@ -94,10 +94,14 @@ engine.on((info) => {
 // Phones only: on a computer, a mark left by a browser shut down mid-passage would wrongly slow it down.
 const PHONE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)) ||
   (() => { try { return localStorage.getItem("readalong:phone") === "1"; } catch { return false; } })(); // to test phone behaviour on a computer
-const GPU_BAD = "readalong:gpu-crashed", SHORT = "readalong:short-passages";
-// Phones read with the device's own voice by default: the ReadAlong voice (Kokoro) needs more memory than Safari gives
-// a tab on an iPhone, even for one short sentence (iPhone, November 2026). It can still be chosen in Settings.
-const DEVICE_VOICE = PHONE && (settings.engine === "auto" || settings.engine === "device") && deviceVoiceAvailable();
+const GPU_BAD = "readalong:gpu-crashed", SHORT = "readalong:short-passages", HEART_BAD = "readalong:heart-crashed";
+// Phones: the ReadAlong voice (Kokoro on onnxruntime-web) needs more memory than Safari gives a tab on an iPhone, even for
+// one short sentence (iPhone, November 2026). "Automatic" on a phone is Heart, a small copy of the same voice on its own
+// engine (heart.worker.js); if Heart ever crashes the tab, the device's own voice (devicevoice.js). Both, and Kokoro, can
+// be chosen in Settings. Computers are not affected.
+const heartCrashed = () => { try { return !!localStorage.getItem(HEART_BAD); } catch { return false; } };
+const DEVICE_VOICE = PHONE && deviceVoiceAvailable() && (settings.engine === "device" || (settings.engine === "auto" && heartCrashed()));
+const HEART = PHONE && settings.engine === "auto" && !DEVICE_VOICE;
 let gpuFailed = false, voiceHeld = false;
 try {
   const raw = localStorage.getItem(BUSY_MARK);
@@ -107,12 +111,13 @@ try {
     let crash; try { crash = JSON.parse(raw); } catch { crash = { backend: raw, step: "voicing a passage" }; }
     const voicing = /^voicing/.test(crash.step || "");
     if (crash.backend === "webgpu") localStorage.setItem(GPU_BAD, "1");
+    else if (crash.backend === "heart") localStorage.setItem(HEART_BAD, "1");
     else if (voicing) localStorage.setItem(SHORT, String(Math.min(2, +(localStorage.getItem(SHORT) || 0) + 1)));
     voiceHeld = true;
     const where = crash.backend === "webgpu" ? "graphics chip" : "processor";
     setTimeout(() => window.readalongReport && window.readalongReport(
       `The page crashed last time (out of memory) while ${crash.step || "voicing"} (${where}). ` +
-      (crash.backend === "webgpu" ? "The voice now uses the processor. " : voicing ? "Passages are now shorter. " : "") +
+      (crash.backend === "webgpu" ? "The voice now uses the processor. " : crash.backend === "heart" ? "The phone's own voice is used from now on (Settings can change it). " : voicing ? "Passages are now shorter. " : "") +
       "The voice will start when you press Play."), 800);
   }
   gpuFailed = !!localStorage.getItem(GPU_BAD);
@@ -125,6 +130,7 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) clear
 // the 330 used on computers need about 640 MB, more than Safari allows a tab on an iPhone.
 function passageSize() {
   if (DEVICE_VOICE) return { deviceText: 1 };
+  if (HEART) return null; // Heart needs about 4.5 MB per second of audio: computer-length passages are fine
   let level = PHONE ? 1 : 0;
   try { level += +(localStorage.getItem(SHORT) || 0); } catch { /* storage blocked */ }
   return [null, { chunkTarget: 110, chunkMax: 150 }, { chunkTarget: 60, chunkMax: 90 }][Math.min(2, level)];
@@ -140,7 +146,7 @@ async function startEngine() {
   let backend = pickBackend(settings.engine);
   // a phone's graphics chip ran out of memory with the full-precision model (iPhone, 2026): phones use the processor
   // unless the graphics card is chosen in Settings
-  if (PHONE && settings.engine === "auto") backend = "wasm";
+  if (PHONE && settings.engine === "auto") backend = "heart";
   if (backend === "webgpu" && gpuFailed && !gpuToldCrash) {
     gpuToldCrash = true;
     try { if (localStorage.getItem(GPU_BAD)) toast("Last time, this device's graphics chip ran out of memory with the voice, so the processor is used instead (slower).", 7000); } catch { /* storage blocked */ }
@@ -1121,7 +1127,8 @@ async function openSettings() {
         ["readHeaders", "Running headers and page numbers"]]
         .map(([k, l]) => `<label class="check"><input type="checkbox" data-k="${k}" ${settings[k] ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
     <div class="field"><span class="label">Voice engine</span>
-      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${PHONE && deviceVoiceAvailable() ? " (this phone's own voice)" : gpu && !gpuFailed ? " (graphics card)" : " (processor)"}</option>
+      <div class="row"><select id="s-engine"><option value="auto" ${settings.engine === "auto" ? "selected" : ""}>Automatic${PHONE ? (heartCrashed() && deviceVoiceAvailable() ? " (this phone's own voice)" : " (ReadAlong's phone voice)") : gpu && !gpuFailed ? " (graphics card)" : " (processor)"}</option>
+        ${PHONE && deviceVoiceAvailable() ? `<option value="device" ${settings.engine === "device" ? "selected" : ""}>This phone's own voice</option>` : ""}
         <option value="webgpu" ${settings.engine === "webgpu" ? "selected" : ""} ${gpu ? "" : "disabled"}>Graphics card (WebGPU)</option>
         <option value="wasm" ${settings.engine === "wasm" ? "selected" : ""}>Processor only (slower)${PHONE ? ", may crash on phones" : ""}</option></select>
       <select id="s-quality"><option value="standard" ${settings.quality === "standard" ? "selected" : ""}>Processor: compact model (92 MB)</option>
