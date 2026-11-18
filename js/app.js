@@ -8,7 +8,7 @@ import { layout, buildPlan } from "./speech.js";
 import { Engine, pickBackend, modelFor, wav, hash, SilentError } from "./engine.js";
 import { Normalizer, Token } from "./normalize.js";
 import { phonemizeTokens } from "./g2p.js";
-import { Player } from "./player.js";
+import { Player, unlockOnTap } from "./player.js";
 import { db } from "./db.js";
 import { VOCAB } from "./vocab.js";
 
@@ -1035,7 +1035,8 @@ function dialog(title, body, foot = "") {
 }
 function closeDialog() { $("#modal-root").innerHTML = ""; }
 
-let previewEl = null;
+const previewEl = new Audio();
+unlockOnTap([previewEl]);
 async function speakPreview(text, word, value, voice) {
   await dictP; const lex = await lexP;
   await startEngine();
@@ -1048,9 +1049,10 @@ async function speakPreview(text, word, value, voice) {
   const phs = await phonemizeTokens(toks.map((t) => t.say || ""));
   const ids = [...phs.join(" ")].map((c) => VOCAB[c]).filter((x) => x !== undefined).slice(0, 500);
   const blob = await engine.sample(ids, voice || settings.voice, +settings.pace);
-  if (previewEl) previewEl.pause();
-  previewEl = new Audio(URL.createObjectURL(blob));
-  previewEl.play();
+  previewEl.pause();
+  if (previewEl.src.startsWith("blob:") && previewEl.dataset.own) URL.revokeObjectURL(previewEl.src);
+  previewEl.src = URL.createObjectURL(blob); previewEl.dataset.own = "1";
+  previewEl.play().catch(() => {});
 }
 
 async function openSettings() {

@@ -22,6 +22,7 @@ export class Player extends EventTarget {
     this.rate = 1;
     this.loadedCi = [-1, -1];
     this.pendingSeek = 0;
+    unlockOnTap(this.els);
   }
   get el() { return this.els[this.cur]; }
   get other() { return this.els[1 - this.cur]; }
@@ -137,6 +138,34 @@ export class Player extends EventTarget {
     }
     this.dispatchEvent(new Event("chunk"));
   }
+}
+
+// Safari on iPhone lets an <audio> element start only if it was first started during a tap. Playback here starts
+// after saved data is read, and the second element is started when the first ends, so the elements are "unlocked"
+// (started and stopped at once) on the first tap or key press anywhere on the page.
+const UNLOCK_EVENTS = ["touchend", "click", "keydown"];
+export function unlockOnTap(els) {
+  const unlock = () => {
+    for (const ev of UNLOCK_EVENTS) document.removeEventListener(ev, unlock, true);
+    for (const el of els) {
+      if (!el.paused) continue; // already playing (started from the headphones, say): nothing to unlock
+      if (!el.getAttribute("src")) el.src = silentUrl();
+      try { const p = el.play(); if (p) p.catch(() => {}); el.pause(); } catch { /* nothing to unlock */ }
+    }
+  };
+  for (const ev of UNLOCK_EVENTS) document.addEventListener(ev, unlock, true);
+}
+let silent = null;
+function silentUrl() { // a tenth of a second of silence, as a WAV file
+  if (!silent) {
+    const n = 2400, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+    const s = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+    s(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); s(8, "WAVEfmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true); v.setUint32(24, 24000, true); v.setUint32(28, 48000, true); v.setUint16(32, 2, true);
+    v.setUint16(34, 16, true); s(36, "data"); v.setUint32(40, n * 2, true);
+    silent = URL.createObjectURL(new Blob([b], { type: "audio/wav" }));
+  }
+  return silent;
 }
 
 function once(el, ev) {
