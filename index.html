@@ -131,7 +131,10 @@
       box = document.createElement("div"); box.id = "crash"; box.setAttribute("role", "alert");
       box.style.cssText = "position:fixed;left:8px;right:8px;top:8px;z-index:999;background:#fff4ec;color:#1b1a17;border:2px solid #c2410c;padding:12px 14px;font:14px/1.4 system-ui,sans-serif;max-height:45vh;overflow:auto";
       box.innerHTML = '<b>Something went wrong.</b> Reloading the page often fixes it. If not, please send a screenshot of this box.<ul style="margin:6px 0 4px;padding-left:18px"></ul><div style="color:#6b6458;font-size:12px"></div><button style="margin-top:6px;padding:4px 10px;border:1px solid #1b1a17;background:none;font:inherit">Close</button>';
-      box.querySelector("div").textContent = navigator.userAgent;
+      // which copy of the site this is (GitHub Pages lets browsers keep files 10 minutes) and whether the
+      // service worker, which always fetches fresh files, is in charge
+      box.querySelector("div").textContent = navigator.userAgent + " · page of " + document.lastModified +
+        (navigator.serviceWorker && navigator.serviceWorker.controller ? " · sw" : " · no sw");
       box.querySelector("button").onclick = function () { box.remove(); shown = {}; };
       (document.body || document.documentElement).appendChild(box);
     }
