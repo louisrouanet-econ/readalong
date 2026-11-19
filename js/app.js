@@ -2,7 +2,9 @@
 import { ensureIsolation } from "./coi.js";
 import { loadDict } from "./g2p.js";
 import { Lexicon } from "./lexicon.js";
-import { extract, loadPdfjs } from "./ingest/index.js";
+import { extract, loadPdfjs, decodeText } from "./ingest/index.js";
+import { webSource, docxSource, alignWords, rangeBoxes, wordKey } from "./webpage.js";
+import { fitTimes } from "./fittimes.js";
 import { fetchLink, LinkError } from "./ingest/link.js";
 import { layout, buildPlan } from "./speech.js";
 import { Engine, pickBackend, modelFor, wav, hash, SilentError, BUSY_MARK } from "./engine.js";
@@ -59,8 +61,8 @@ const VOICES = [
 const planSig = (lex) => JSON.stringify([settings.readFootnotes, settings.readCitations, settings.readReferences,
   settings.readCaptions, settings.readHeaders, !!settings.readFigures, lex.version(), passageSize(), 4]);
 // bump when text extraction improves: readings added earlier are re-read from their file when next opened
-const EXTRACT_VERSION = 2;
-const typeName = (t) => ({ para: "part", figure: "chart or table text" }[t] || t);
+const EXTRACT_VERSION = 3;
+const typeName = (t) => ({ para: "part", figure: "chart or table text", equation: "equation" }[t] || t);
 const voiceSig = () => HEART ? `heart|${(+settings.pace).toFixed(2)}|mesm-v2f|1` : `${settings.voice}|${(+settings.pace).toFixed(2)}|kokoro-v1.0-ts|3`;
 
 // ======================================================================= shared resources
@@ -200,6 +202,7 @@ async function prepare(id, { reextract = false, forceOcr = false, upgrade = fals
     if (!ex.blocks.some((b) => b.words.length)) throw new Error("No text found in this file.");
     if (forceOcr) h.forcedOcr = true; else if (reextract) delete h.forcedOcr;
     h.overrides = {}; // per-passage choices refer to the old passages
+    store.set("webfail:" + id, false); // the new words may now be found on the web page
     h.view = layout(ex);
     h.pages = ex.pages;
     h.kind = ex.kind;
@@ -463,6 +466,7 @@ function closeReader() {
   R.urls.clear(); R.times.clear();
   if (R.pdfTask) { R.pdfTask.destroy(); R.pdfTask = null; R.pdf = null; }
   if (R.io) R.io.disconnect();
+  closeWeb();
   R.id = null;
   voicer.focus = { id: null, ci: 0 };
   closeDialog();
@@ -516,7 +520,8 @@ async function openReader(id, { keepWord } = {}) {
   }
   const notesRec = await db.get("notes", id);
   R.notes = reanchor(notesRec ? notesRec.notes : [], h.view.words);
-  const hasPages = h.pages && h.pages.length > 0 && h.kind === "pdf";
+  // PDFs: the printed pages; web pages and Word documents: the page as it looks (unless its words could not be found on it before)
+  const hasPages = (h.kind === "pdf" && h.pages && h.pages.length > 0) || ((h.kind === "html" || h.kind === "docx") && !store.get("webfail:" + id, false));
   $("#viewmode").hidden = !hasPages;
   R.mode = hasPages ? store.get("mode:" + id, store.get("mode", "page")) : "text";
   await renderView();
@@ -530,13 +535,25 @@ async function openReader(id, { keepWord } = {}) {
   updateStatus();
 }
 
+async function storedTimes(st, ci) {
+  const rec = await db.get("audio", st.keys[ci]);
+  const fit = rec && fitTimes(st.chunks[ci], rec);
+  if (!fit) { // missing, or recorded for other words: voice it again
+    st.have.delete(ci);
+    if (rec) await db.del("audio", st.keys[ci]);
+    voicer.focus = { id: R.id, ci }; voicer.run();
+    return null;
+  }
+  R.times.set(ci, fit);
+  return fit;
+}
+
 async function chunkUrl(ci) {
   if (R.urls.has(ci)) return R.urls.get(ci);
   const st = await voicer.get(R.id);
   if (!st || !st.have.has(ci)) { voicer.focus = { id: R.id, ci }; voicer.run(); return null; }
-  const rec = await db.get("audio", st.keys[ci]);
-  if (!rec) { st.have.delete(ci); return null; }
-  R.times.set(ci, rec);
+  const rec = await storedTimes(st, ci);
+  if (!rec) return null;
   const url = URL.createObjectURL(wav(new Int16Array(rec.pcm)));
   R.urls.set(ci, url);
   player.setDuration(ci, rec.dur);
@@ -549,9 +566,7 @@ async function chunkTimes(ci) {
   if (R.times.has(ci)) return R.times.get(ci);
   const st = await voicer.get(R.id);
   if (!st || !st.have.has(ci)) return null;
-  const rec = await db.get("audio", st.keys[ci]);
-  if (rec) R.times.set(ci, rec);
-  return rec;
+  return storedTimes(st, ci);
 }
 
 voicer.listeners.add((id, ci, rec) => {
@@ -587,11 +602,160 @@ function updateStatus() {
 // ======================================================================= rendering the document
 async function renderView() {
   const view = $("#docview");
+  R.renderSeq = (R.renderSeq || 0) + 1;
   $$("#viewmode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === R.mode));
   R.hlWord = null; R.sentEls = []; R.wordEls = []; R.sheets = []; R.curWord = -1; R.curSent = -1;
   if (R.io) R.io.disconnect();
-  if (R.mode === "page") await renderPages(view); else renderText(view);
+  closeWeb();
+  if (R.mode === "page" && (R.h.kind === "html" || R.h.kind === "docx")) {
+    if (!(await renderWebPage(view))) { // the page could not be matched with its words: the text view instead
+      R.mode = "text";
+      $("#viewmode").hidden = true;
+      $$("#viewmode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === R.mode));
+      toast("This page's layout could not be matched with its words, so it is shown as text.", 5000);
+      renderText(view);
+    }
+  } else if (R.mode === "page") await renderPages(view);
+  else renderText(view);
   applyZoom();
+  renderPins();
+}
+
+// ----------------------------------------------------------------------- web pages as they look
+// The page is drawn in a frame without scripts (sandbox without allow-scripts; webpage.js also removes them). The frame
+// is as tall as the page and does not take clicks: the reader scrolls, and a layer above it (.ov) takes clicks and holds
+// the highlight, as on a PDF page. Each word read aloud is a Range on the page (webpage.js), measured when needed, so
+// zooming, resizing and late images are followed.
+const WEB_MIN_MATCH = 0.85; // share of the words read aloud that must be found on the page
+function closeWeb() {
+  if (!R.web) return;
+  R.web.ro.disconnect();
+  clearTimeout(R.web.t);
+  R.web = null;
+}
+async function renderWebPage(view) {
+  const id = R.id;
+  if (store.get("webfail:" + id, false)) return false;
+  const docx = R.h.kind === "docx";
+  view.innerHTML = `<div class="pages"><div class="sheet web"><div class="webscale"><iframe class="webframe" sandbox="allow-same-origin" referrerpolicy="no-referrer" title="The original page" tabindex="-1"></iframe><div class="ov"></div></div></div></div>`;
+  const frame = $("iframe", view), sheet = $(".sheet", view), scaleEl = $(".webscale", view);
+  $("#scroll").scrollTop = 0;
+  const seq = R.renderSeq;
+  let src;
+  try { // a Word document is first drawn as Word lays it out (pages, fonts, images), by docx-preview
+    src = docx ? webSource(await docxSource(new Uint8Array(R.h.bytes)), null) : webSource(decodeText(new Uint8Array(R.h.bytes)), R.h.url);
+  } catch (e) { console.warn("ReadAlong: the document could not be drawn", e); return false; }
+  if (R.renderSeq !== seq || !frame.isConnected) return true;
+  const loaded = new Promise((r) => frame.addEventListener("load", r, { once: true }));
+  frame.srcdoc = src;
+  // "load" waits for every image and style sheet of the page; the text is enough (late images are followed below)
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await Promise.race([loaded, sleep(4000)]);
+  for (let k = 0; k < 100 && frame.isConnected && !(frame.contentDocument && frame.contentDocument.URL === "about:srcdoc" && frame.contentDocument.readyState !== "loading"); k++) await sleep(100);
+  if (R.id !== id || R.renderSeq !== seq || !frame.isConnected) return true; // another view was asked for meanwhile
+  const doc = frame.contentDocument;
+  if (!doc || !doc.body) return false;
+  const v = R.view;
+  const ranges = alignWords(doc, v.words);
+  // enough of what is read aloud must be on the page, and visible there
+  let want = 0, got = 0;
+  v.blocks.forEach((b) => { if (b.spoken) for (let i = b.w0; i < b.w1; i++) if (wordKey(v.words[i].t)) { want++; if (rangeBoxes(ranges[i]).length) got++; } });
+  console.info(`ReadAlong: ${got} of ${want} words read aloud were found on the page`);
+  if (!want || got / want < WEB_MIN_MATCH) {
+    store.set("webfail:" + id, true);
+    return false;
+  }
+  R.web = { frame, doc, sheet, ov: $(".ov", sheet), ranges, heights: [], t: 0, ro: null, scale: 1, fitWidth: docx };
+  const fit = () => {
+    const w = R.web;
+    if (!w) return;
+    if (w.fitWidth) {
+      // a Word document keeps its printed page width and is scaled to the reader's width, like a PDF page
+      const wrap = doc.querySelector(".docx-wrapper") || doc.body, ws = doc.defaultView.getComputedStyle(wrap);
+      const pageW = Math.max(300, ...[...doc.querySelectorAll("section.docx")].map((p) => p.offsetWidth));
+      const natural = Math.ceil(pageW + (parseFloat(ws.paddingLeft) || 0) + (parseFloat(ws.paddingRight) || 0));
+      if (frame.style.width !== natural + "px") { frame.style.width = natural + "px"; scaleEl.style.width = natural + "px"; }
+      w.scale = sheet.clientWidth / natural;
+      scaleEl.style.transform = `scale(${w.scale})`;
+    }
+    // the page's own height (the document's scroll height never falls below the frame's, so it could only grow)
+    const body = doc.body, cs = doc.defaultView.getComputedStyle(body);
+    const wide = doc.documentElement.scrollWidth > doc.documentElement.clientWidth + 1; // room for the sideways scrollbar
+    const h = Math.ceil(Math.max(body.scrollHeight, body.getBoundingClientRect().bottom) + (parseFloat(cs.marginBottom) || 0) + (wide ? 18 : 0));
+    const last = w.heights[w.heights.length - 1] || 0;
+    if (Math.abs(h - last) > 1) {
+      // a part as tall as the window grows with the frame; stop following after a few equal steps
+      w.heights.push(h);
+      const d = w.heights.slice(-4).map((x, k, a) => (k ? x - a[k - 1] : 0)).slice(1);
+      if (!(d.length === 3 && d.every((x) => x > 0 && Math.abs(x - d[0]) < 2))) frame.style.height = h + "px";
+    }
+    if (w.fitWidth) sheet.style.height = Math.ceil(parseFloat(frame.style.height) * w.scale) + "px";
+    clearTimeout(w.t);
+    w.t = setTimeout(webOverlays, 120);
+  };
+  R.web.ro = new ResizeObserver(fit);
+  R.web.ro.observe(doc.body);
+  R.web.ro.observe(frame);
+  R.web.ro.observe(sheet); // zoom and window size
+  // The page takes the mouse, so wide tables and side-scrolling boxes scroll as on the original. Its own scripts
+  // never run (sandbox); these listeners are the reader's: a click reads from the word under it (links are not
+  // followed), keys and the wheel do what they do in the reader, and sideways scrolling moves the highlight along.
+  doc.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (String(doc.getSelection() || "")) return; // selecting text
+    webClick(e.clientX, e.clientY);
+  }, true);
+  doc.addEventListener("keydown", onKey);
+  ["wheel", "touchmove"].forEach((ev) => doc.addEventListener(ev, pauseFollow, { passive: true }));
+  doc.addEventListener("scroll", () => { clearTimeout(R.web && R.web.t); if (R.web) R.web.t = setTimeout(webOverlays, 60); }, true);
+  fit();
+  webOverlays();
+  return true;
+}
+/** A click on the page (in the page's own pixels): read from the nearest word, as on a PDF page. */
+function webClick(x, y) {
+  let best = -1, bd = 1e9;
+  R.web.ranges.forEach((rg, i) => {
+    if (!rg) return;
+    for (const b of rangeBoxes(rg)) {
+      if (Math.abs(b.top - y) > 300) continue;
+      const dx = x < b.left ? b.left - x : x > b.right ? x - b.right : 0, dy = y < b.top ? b.top - y : y > b.bottom ? y - b.bottom : 0;
+      const d = dx * dx + dy * dy * 4;
+      if (d < bd) { bd = d; best = i; }
+    }
+  });
+  if (best < 0 || bd > 600) return;
+  readFromClick(best);
+}
+/** Boxes of word wi relative to the page layer (.ov), or []. */
+function webBoxes(wi) {
+  return R.web ? rangeBoxes(R.web.ranges[wi]) : [];
+}
+function putBox(el, b) {
+  Object.assign(el.style, { left: b.left + "px", top: b.top + "px", width: b.width + "px", height: b.height + "px" });
+}
+/** Parts not read aloud are hatched; drawn again whenever the page's layout changes. */
+function webOverlays() {
+  const w = R.web;
+  if (!w) return;
+  $$(".skipzone", w.ov).forEach((d) => d.remove());
+  const v = R.view;
+  for (const b of v.blocks) {
+    if (b.spoken) continue;
+    let box = null;
+    for (let i = b.w0; i < b.w1; i++) for (const r of webBoxes(i)) {
+      box = box ? { l: Math.min(box.l, r.left), t: Math.min(box.t, r.top), r: Math.max(box.r, r.right), b: Math.max(box.b, r.bottom) } : { l: r.left, t: r.top, r: r.right, b: r.bottom };
+    }
+    if (!box) continue;
+    const d = document.createElement("div");
+    d.className = "skipzone";
+    putBox(d, { left: box.l - 2, top: box.t - 1, width: box.r - box.l + 4, height: box.b - box.t + 2 });
+    w.ov.appendChild(d);
+  }
+  // the highlight follows the new layout
+  const si = R.curSent;
+  if (R.curWord >= 0) setWord(R.curWord);
+  if (si >= 0) setSentence(si);
   renderPins();
 }
 
@@ -732,6 +896,13 @@ function setWord(wi) {
   if (R.mode === "text") {
     if (prev >= 0 && R.wordEls[prev]) R.wordEls[prev].classList.remove("c");
     if (wi >= 0 && R.wordEls[wi]) R.wordEls[wi].classList.add("c");
+  } else if (R.web) {
+    const b = wi >= 0 ? webBoxes(wi)[0] : null;
+    if (b) {
+      if (!R.hlWord) { R.hlWord = document.createElement("div"); R.hlWord.className = "hl-word"; }
+      if (R.hlWord.parentNode !== R.web.ov) R.web.ov.appendChild(R.hlWord);
+      putBox(R.hlWord, { left: b.left - 2, top: b.top - 1, width: b.width + 4, height: b.height + 2 });
+    } else if (R.hlWord) R.hlWord.remove();
   } else if (wi >= 0 && v.words[wi].b) {
     const w = v.words[wi];
     if (!R.hlWord) { R.hlWord = document.createElement("div"); R.hlWord.className = "hl-word"; }
@@ -757,6 +928,25 @@ function setSentence(si) {
   R.sentEls.forEach((d) => d.remove());
   R.sentEls = [];
   if (!s) return;
+  if (R.web) { // one underline per line of the page: boxes on the same line are joined
+    const lines = [];
+    for (let i = s.w0; i < s.w1; i++) {
+      if (v.words[i].sup) continue;
+      for (const b of webBoxes(i)) {
+        const ln = lines.find((l) => Math.abs(l.bottom - b.bottom) < 0.5 * b.height && b.left >= l.left - 4);
+        if (ln) { ln.left = Math.min(ln.left, b.left); ln.right = Math.max(ln.right, b.right); ln.top = Math.min(ln.top, b.top); ln.bottom = Math.max(ln.bottom, b.bottom); }
+        else lines.push({ left: b.left, right: b.right, top: b.top, bottom: b.bottom });
+      }
+    }
+    for (const ln of lines) {
+      const d = document.createElement("div");
+      d.className = "hl-line";
+      putBox(d, { left: ln.left, top: ln.top, width: ln.right - ln.left, height: ln.bottom - ln.top + 1.5 });
+      R.web.ov.appendChild(d);
+      R.sentEls.push(d);
+    }
+    return;
+  }
   const lines = [];
   let line = null;
   for (let i = s.w0; i < s.w1; i++) {
@@ -779,6 +969,12 @@ function setSentence(si) {
 const scroller = $("#scroll");
 function wordRect(wi) {
   if (R.mode === "text") return R.wordEls[wi] ? R.wordEls[wi].getBoundingClientRect() : null;
+  if (R.web) {
+    const b = webBoxes(wi)[0];
+    if (!b) return null;
+    const fr = R.web.frame.getBoundingClientRect();
+    return { top: fr.top + b.top * R.web.scale, bottom: fr.top + b.bottom * R.web.scale };
+  }
   const w = R.view.words[wi];
   if (!w || !w.b) return null;
   const pr = R.sheets[w.p].getBoundingClientRect(), pg = R.h.pages[w.p];
@@ -793,13 +989,15 @@ function centerOn(wi, now) {
     scroller.scrollTo({ top: scroller.scrollTop + (r.top - sr.top) - sr.height * 0.32, behavior: now ? "auto" : "smooth" });
   }
 }
-["wheel", "touchmove"].forEach((ev) => scroller.addEventListener(ev, () => {
+/** Scrolling by hand while the voice plays: the page stops following it for a while. */
+function pauseFollow() {
   if (!player.want || !R.follow) return;
   R.followPauseUntil = Date.now() + 9000;
   $("#back-to-voice").hidden = false;
   clearTimeout(R.btv);
   R.btv = setTimeout(() => ($("#back-to-voice").hidden = true), 9000);
-}, { passive: true }));
+}
+["wheel", "touchmove"].forEach((ev) => scroller.addEventListener(ev, pauseFollow, { passive: true }));
 $("#back-to-voice").onclick = () => { R.followPauseUntil = 0; $("#back-to-voice").hidden = true; centerOn(R.curWord, true); };
 
 // ======================================================================= seeking
@@ -860,7 +1058,7 @@ $("#docview").addEventListener("click", (e) => {
   if (tog) { toggleBlock(+tog.dataset.tog); return; }
   if (R.mode === "text") { const sp = e.target.closest("span.w"); if (sp) seekToWord(+sp.dataset.i, true); return; }
   const ov = e.target.closest(".ov");
-  if (!ov) return;
+  if (!ov || R.web) return; // a web page takes its own clicks (webClick)
   const p = +ov.parentNode.dataset.p, pg = R.h.pages[p];
   const r = ov.getBoundingClientRect();
   const x = ((e.clientX - r.left) / r.width) * pg.w, y = ((e.clientY - r.top) / r.height) * pg.h;
@@ -872,13 +1070,16 @@ $("#docview").addEventListener("click", (e) => {
     if (d < bd) { bd = d; best = i; }
   }
   if (best < 0 || bd > 400) return;
-  if (R.wordChunk[best] < 0) {
-    const b = R.view.blocks[R.view.words[best].k];
+  readFromClick(best);
+});
+function readFromClick(wi) {
+  if (R.wordChunk[wi] < 0) {
+    const b = R.view.blocks[R.view.words[wi].k];
     toast(`This ${typeName(b.type)} is not read aloud. In the Text view you can switch it on.`, 3500);
     return;
   }
-  seekToWord(best, true);
-});
+  seekToWord(wi, true);
+}
 
 // player controls
 $("#play").onclick = () => { if (R.curWord < 0 && !player.want) seekToWord(0, true); else player.toggle(); };
@@ -973,7 +1174,13 @@ function renderPins() {
     if (!w) return;
     const pin = document.createElement("button");
     pin.className = "pin"; pin.dataset.note = n.id; pin.title = n.text.slice(0, 140); pin.textContent = k + 1;
-    if (R.mode === "page" && w.b && R.sheets[w.p]) {
+    if (R.mode === "page" && R.web) {
+      const b = webBoxes(n.w)[0];
+      if (!b) return;
+      pin.style.left = "calc(100% - 14px)";
+      pin.style.top = b.top + "px";
+      R.web.ov.appendChild(pin);
+    } else if (R.mode === "page" && w.b && R.sheets[w.p]) {
       const pg = R.h.pages[w.p];
       pin.style.left = "calc(100% - 14px)";
       pin.style.top = (w.b[1] / pg.h) * 100 + "%";
@@ -1123,7 +1330,7 @@ async function openSettings() {
       <p class="fine">How fast the voice is produced. You can also change the playback speed while listening.</p></div>
     <div class="field"><span class="label">What is read aloud</span>
       ${[["readCitations", "In-text citations such as (Olson 1982, 23)"], ["readFootnotes", "Footnotes"], ["readReferences", "Reference lists and endnotes"],
-        ["readCaptions", "Figure and table captions"], ["readFigures", "Text inside charts and tables (numbers, labels)"],
+        ["readCaptions", "Figure and table captions"], ["readFigures", "Text inside charts, tables and equations (numbers, labels, symbols)"],
         ["readHeaders", "Running headers and page numbers"]]
         .map(([k, l]) => `<label class="check"><input type="checkbox" data-k="${k}" ${settings[k] ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
     <div class="field"><span class="label">Voice engine</span>
@@ -1256,7 +1463,8 @@ $("#r-title").addEventListener("blur", async function () {
   const t = this.textContent.trim();
   if (t && R.id && t !== R.meta.title) { R.meta = await setMeta(R.id, { title: t, titleLocked: true }); toast("Renamed."); }
 });
-document.addEventListener("keydown", (e) => {
+/** Reader keys; also listened to on a web page shown as it looks (the page has the focus after a click). */
+function onKey(e) {
   if (e.key === "Escape" && $("#modal-root").innerHTML) { closeDialog(); return; }
   if (typing(e) || $("#reader").hidden || !R.h || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key;
@@ -1267,7 +1475,8 @@ document.addEventListener("keydown", (e) => {
   else if (k === "f" || k === "F") $("#follow").click();
   else if ((k === "t" || k === "T") && !$("#viewmode").hidden) setMode(R.mode === "page" ? "text" : "page");
   else if (k === "[" || k === "]") { stepSpeed(k === "]" ? 1 : -1); toast(`Speed ${$("#speed").textContent}`, 1000); }
-});
+}
+document.addEventListener("keydown", onKey);
 window.addEventListener("beforeunload", savePos);
 window.addEventListener("resize", () => { if (R.mode === "page" && R.curWord >= 0) setWord(R.curWord); });
 

@@ -121,10 +121,15 @@ export class Engine {
     const shift = chunk.pause - a / SR;
     const seg = kokoroTimestamps(chunk.ids, durations);
     const wids = [], s = [], e = [];
-    for (const [w, ia, ib] of chunk.spans) {
+    // span times are kept too: the same passage text can come back with other word numbers (re-extraction, or the same
+    // sentence twice in a reading), and the stored audio is shared; word times are then rebuilt from the spans (app.js)
+    const spanT = new Float32Array(2 * chunk.spans.length).fill(NaN);
+    for (let si = 0; si < chunk.spans.length; si++) {
+      const [w, ia, ib] = chunk.spans[si];
       const first = seg.find((g) => g.b > ia), last = [...seg].reverse().find((g) => g.a < ib);
       if (!first || !last) continue;
       const t0 = first.s + shift, t1 = Math.max(first.s, last.e) + shift;
+      spanT[2 * si] = t0; spanT[2 * si + 1] = t1;
       const lens = w.map(() => 1);
       const tot = lens.length;
       w.forEach((wid, k) => {
@@ -133,7 +138,7 @@ export class Engine {
         e.push(t0 + ((t1 - t0) * (k + 1)) / tot);
       });
     }
-    return { pcm: pcm.buffer, dur: pcm.length / SR, wids: Int32Array.from(wids), s: Float32Array.from(s), e: Float32Array.from(e) };
+    return { pcm: pcm.buffer, dur: pcm.length / SR, wids: Int32Array.from(wids), s: Float32Array.from(s), e: Float32Array.from(e), spanT };
   }
 
   async sample(ids, voice, speed) {

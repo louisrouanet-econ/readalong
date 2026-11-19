@@ -18,7 +18,7 @@ export function blockIsSpoken(block, settings, override) {
   if (t === "footnote") return !!settings.readFootnotes;
   if (t === "reference") return !!settings.readReferences;
   if (t === "caption") return settings.readCaptions !== false;
-  if (t === "figure") return !!settings.readFigures; // numbers and labels inside charts and tables
+  if (t === "figure" || t === "equation") return !!settings.readFigures; // inside charts, tables and equations
   if (t === "header") return !!settings.readHeaders;
   return false;
 }

@@ -12,7 +12,10 @@ const NUM_HEAD = /^\(?(\d{1,2}(\.\d{1,2})*[.)]|[IVXLC]{1,6}[.)]?)\s+\S/;
 const TERMINAL = /[.!?]["'”’)\]]*$/;
 const BULLET = /^[•▪◦●■□‣∙⁃➢►✓✔]/;
 
-const fixChars = (s) => s.replace(/[­«»ﬀ-ﬄ]/g, (c) => CHAR_FIX[c] ?? c);
+// Private-use characters are glyphs of symbol and math fonts with no known meaning (The Missing Billionaires: a MathType
+// mark drawn over each "k", U+F024). They cannot be said, and as words of their own, set a little above the line, they
+// broke the line apart, and the pieces were then read out of order.
+const fixChars = (s) => s.replace(/[­«»ﬀ-ﬄ-]/g, (c) => CHAR_FIX[c] ?? (c >= "" && c <= "" ? "" : c));
 
 import { splitWord, needsSpacingRepair } from "./repair.js";
 
@@ -117,7 +120,7 @@ async function pageBlocks(page, pdfjs, repairSpacing = false) {
     const prev = line && line.frags[line.frags.length - 1];
     const ref = line ? line.maxSz : f.sz;
     const sameBase = line && Math.abs(f.base - line.base) < 0.45 * Math.max(ref, f.sz);
-    const raised = line && f.sz < 0.8 * ref && line.base - f.base > 0.15 * ref && line.base - f.base < 0.8 * ref;
+    const raised = line && f.sz < 0.8 * ref && line.base - f.base > 0.15 * ref && line.base - f.base < 0.9 * ref;
     if (line && (sameBase || raised) && f.b[0] >= prev.b[2] - 0.35 * ref && f.b[0] - prev.b[2] < 2.2 * ref && !prev.eol) {
       line.frags.push(f);
       if (!raised) line.maxSz = Math.max(line.maxSz, f.sz);
@@ -132,7 +135,9 @@ async function pageBlocks(page, pdfjs, repairSpacing = false) {
     const words = [];
     for (const f of ln.frags) {
       const raisedSmall = f.sz < 0.8 * ln.maxSz && ln.base - f.base > 0.15 * ln.maxSz;
-      const sup = raisedSmall && FOOTMARK.test(f.t);
+      // a small number opening a line beside full-size text: an exponent left over from a displayed equation
+      const leadSmall = !words.length && ln.frags.length > 1 && f.sz < 0.75 * ln.maxSz;
+      const sup = (raisedSmall || leadSmall) && FOOTMARK.test(f.t);
       const prev = words[words.length - 1];
       const gap = prev ? f.b[0] - prev.b[2] : 99;
       if (prev && !sup && !prev.sup && !f.spaceBefore && !prev.spaceAfter && gap < 0.15 * ln.maxSz) {
@@ -277,6 +282,36 @@ function figureBlocks(blocks, body, W, H) {
   return out;
 }
 
+// Displayed equations: blocks made only of single italic letters, Greek letters, short numbers and signs ("k", "2",
+// "x = y + 1"). Math fonts often carry no text for their symbols (μ, σ and γ come out empty), so what is left cannot
+// be read meaningfully: like the inside of a table, it stays on the page but is not read.
+const MATH_TOKEN = /^[\p{L}\p{N}ˆ˜¯$%=+\-−–×÷·⋅/()[\]{}<>≤≥≈≠±∑∏∫√∞∂∆∇,.;:′'*^_|!]+$/u;
+const MATH_SIGN = /[=+−×÷·⋅/<>≤≥≈≠±∑∏∫√∞∂∆∇^_|]|[Ͱ-Ͽ]/u;
+const LONE_NUMBER = /^\d{1,3}$/;
+const MATH_FN = /^(ln|log|exp|max|min|lim|sin|cos|tan|var|cov|Var|Cov|det|arg|sup|inf)[(),.]*$/;
+function equationBlocks(blocks, body, H) {
+  const wordsOf = (b) => b.lines.flatMap((l) => l.words);
+  const mathish = (b) => {
+    const ws = wordsOf(b), txt = blockText(b).trim();
+    if (!ws.length || ws.length > 12 || b.lines.length > 4 || letterCount(txt) > 6) return false;
+    if (!ws.every((w) => MATH_FN.test(w.t) || (w.t.length <= 4 && MATH_TOKEN.test(w.t) && !/\p{L}{2}/u.test(w.t)))) return false;
+    if ((b.bbox[1] < 0.15 * H || b.bbox[3] > 0.78 * H) && PAGENUM.test(txt)) return false;
+    return true;
+  };
+  // a variable (italic or Greek letter) or a sign; a lone number alone could be a page number or a note mark
+  const variable = (b) => wordsOf(b).some((w) => (w.it && /\p{L}/u.test(w.t)) || MATH_SIGN.test(w.t) || MATH_FN.test(w.t) || /^[$%]$/.test(w.t));
+  const cand = blocks.filter(mathish);
+  const near = (a, c) => Math.max(0, Math.max(a.bbox[1], c.bbox[1]) - Math.min(a.bbox[3], c.bbox[3])) < 2.5 * body &&
+    Math.max(0, Math.max(a.bbox[0], c.bbox[0]) - Math.min(a.bbox[2], c.bbox[2])) < 8 * body;
+  // one stray letter is not an equation: a part counts when it holds a relation of its own ("x = 2"), or when
+  // another part of the same equation is close by and one of the two has a variable or a sign
+  return new Set(cand.filter((b) => {
+    const ws = wordsOf(b);
+    if (ws.length >= 3 && ws.some((w) => /^[=<>≤≥≈≠]$/.test(w.t)) && variable(b)) return true;
+    return cand.some((c) => c !== b && near(b, c) && (variable(b) || variable(c)));
+  }));
+}
+
 function classify(pagesBlocks, dims, body, boldSignal, scanned) {
   const nPages = pagesBlocks.length;
   const band = [];
@@ -302,6 +337,7 @@ function classify(pagesBlocks, dims, body, boldSignal, scanned) {
     const [W, H] = dims[p];
     const cover = p === 0 && isCover(blocks);
     const fig = figureBlocks(blocks, body, W, H);
+    const eqs = equationBlocks(blocks, body, H);
     for (const b of blocks) {
       const txt = blockText(b).trim();
       const words = b.lines.flatMap((l) => l.words);
@@ -325,6 +361,7 @@ function classify(pagesBlocks, dims, body, boldSignal, scanned) {
       else if (inBand && (/^[\divxlcdm.\-– ]+$/i.test(txt) || (nwords <= 20 && nPages > 1 && (repeats(p, txt) || size < 0.95 * body)))) t = "header";
       else if (isCaptionTitle(b)) t = "caption";
       else if (fig.has(b)) t = "figure";
+      else if (eqs.has(b)) t = "equation";
       else if (b.lines.length === 1 && nwords <= 12 && NUM_HEAD.test(txt) && !/[-,]$/.test(txt) && size >= 0.8 * body) t = "heading";
       else if (boldSignal && nwords <= 12 && b.lines.length <= 2 && words.every((w) => w.bold) && !TERMINAL.test(txt) && /\p{L}{2}/u.test(txt)) t = "heading";
       else if ((x1 - x0) < 0.26 * W && size < 0.95 * body && (x0 > 0.55 * W || x1 < 0.45 * W) && besideBody(b, blocks)) t = "margin";

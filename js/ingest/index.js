@@ -32,7 +32,7 @@ export function looksBinary(bytes) {
   return n > 0 && bad / n > 0.02;
 }
 
-function decodeText(bytes) {
+export function decodeText(bytes) {
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return new TextDecoder("windows-1252").decode(bytes); }
 }
 
