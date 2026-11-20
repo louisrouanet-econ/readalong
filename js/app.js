@@ -2,7 +2,7 @@
 import { ensureIsolation } from "./coi.js";
 import { loadDict } from "./g2p.js";
 import { Lexicon } from "./lexicon.js";
-import { extract, loadPdfjs, decodeText } from "./ingest/index.js";
+import { extract, loadPdfjs, decodeText, PDF_OPTS } from "./ingest/index.js";
 import { webSource, docxSource, alignWords, rangeBoxes, wordKey } from "./webpage.js";
 import { fitTimes } from "./fittimes.js";
 import { fetchLink, LinkError } from "./ingest/link.js";
@@ -765,7 +765,7 @@ async function renderPages(view) {
   R.sheets = $$(".sheet", view);
   if (!R.pdf) {
     const pdfjs = await loadPdfjs();
-    R.pdfTask = pdfjs.getDocument({ data: new Uint8Array(R.h.bytes), isEvalSupported: false });
+    R.pdfTask = pdfjs.getDocument({ data: new Uint8Array(R.h.bytes), ...PDF_OPTS });
     R.pdf = await R.pdfTask.promise;
   }
   R.io = new IntersectionObserver((entries) => {

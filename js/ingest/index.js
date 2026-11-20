@@ -1,5 +1,6 @@
 // Detect a reading's format from its bytes (not its name) and extract words + structure.
-import { extractPdf } from "./pdf.js";
+import { extractPdf, PDF_OPTS } from "./pdf.js";
+export { PDF_OPTS };
 import { extractDocx, extractHtml, extractText } from "./flow.js";
 
 let pdfjsP = null;

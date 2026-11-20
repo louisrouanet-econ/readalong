@@ -2,6 +2,13 @@
 // Port of ReadingApp_1/reader/ingest/pdf.py, with PDF.js text runs grouped into lines and blocks first
 // (PyMuPDF gives blocks directly; PDF.js gives positioned text runs).
 
+// Files PDF.js loads only when a PDF needs them: decoders for scanned-page images (black-and-white fax and JBIG2
+// scans, JPEG 2000), the 14 standard fonts for PDFs that do not embed them, character maps for Asian fonts, and colour
+// profiles. Without them such pages are drawn blank (and OCR of them finds nothing).
+const PDFJS_DIR = new URL("../../vendor/pdfjs/", import.meta.url).href;
+export const PDF_OPTS = { isEvalSupported: false, wasmUrl: PDFJS_DIR + "wasm/", standardFontDataUrl: PDFJS_DIR + "standard_fonts/",
+  cMapUrl: PDFJS_DIR + "cmaps/", cMapPacked: true, iccUrl: PDFJS_DIR + "iccs/" };
+
 const CHAR_FIX = { "­": "", "«": "“", "»": "”", "ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff",
   "ﬃ": "ffi", "ﬄ": "ffl" };
 const FOOTMARK = /^[\d*†‡§¶]+$/;
@@ -506,7 +513,7 @@ function paragraphs(orderedPages) {
 export async function extractPdf(data, opts) {
   const { pdfjs, forceOcr = false, onProgress = () => {}, ocrPage = null, skipOcr = false } = opts;
   // fontExtraProperties: font names are needed to tell bold and italic apart
-  const task = pdfjs.getDocument({ data: new Uint8Array(data), isEvalSupported: false, fontExtraProperties: true });
+  const task = pdfjs.getDocument({ data: new Uint8Array(data), ...PDF_OPTS, fontExtraProperties: true });
   const doc = await task.promise;
   const pagesBlocks = [], dims = [], scanned = [];
   let ocrPages = 0;
